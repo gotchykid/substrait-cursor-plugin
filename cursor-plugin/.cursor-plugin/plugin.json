@@ -4,6 +4,7 @@
   "homepage": "https://app.substrait.build",
   "repository": "https://github.com/gotchykid/substrait-cursor-plugin",
   "keywords": ["substrait", "deploy", "fastapi", "upload"],
+  "logo": "assets/logo.svg",
   "skills": "skills/",
   "commands": "commands/",
   "hooks": "hooks/hooks.json"
