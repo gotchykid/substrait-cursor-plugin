@@ -3,7 +3,8 @@
 Keep:
   - listening on port 8000
   - GET /health (the readiness probe)
-  - API routes under /api (the ingress routes /api here; everything else → frontend)
+  - API routes under /api (the ingress routes /api here; everything else → frontend,
+    or to this backend when no frontend/ is shipped — then serve / yourself)
   - reading DATABASE_URL / REDIS_URL / JWT_SECRET from the environment
 
 Database: the platform provisions an **OceanBase** database per app and injects

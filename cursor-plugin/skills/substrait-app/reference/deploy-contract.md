@@ -84,17 +84,24 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 ## Full-stack: one host, path-based routing
 
-The app deploys as full-stack into one sandbox namespace behind **one ingress host**:
+The app deploys into one sandbox namespace behind **one ingress host**:
 
 - **`/api`** → the backend service.
-- **everything else** → the frontend (the SPA).
+- **everything else** → the frontend (the SPA) **when you ship a `frontend/`**;
+  otherwise it also goes to the **backend** (see backend-only below).
 
 So the backend **must serve its HTTP API under `/api`** (e.g. `/api/users`), and the
 frontend calls the API **same-origin via relative `/api` paths** — no API URL is baked
 into the bundle (the scaffold's `cicd/Dockerfile.frontend` builds with `VITE_API_URL=""`).
 That Dockerfile builds the Vite bundle and serves it via nginx on port 80; the platform
-deploys `<slug>-frontend` beside `<slug>-backend`. If you ship no `frontend/`, only the
-backend is deployed (and you need no frontend Dockerfile).
+deploys `<slug>-frontend` beside `<slug>-backend`.
+
+**Backend-only (no `frontend/`).** You need no frontend Dockerfile, and the platform
+routes **all** traffic — `/api` *and* everything else, including `/` — to the backend.
+This means a backend-only app **must serve its own root and pages itself**, not just
+`/api`: a single container that renders the whole site (e.g. a Next.js or server-rendered
+app) works as-is, but a pure-API backend with no `/` route will return its own **404** on
+the homepage (not a 502 — the app is reachable; it just hasn't defined a root route).
 
 ### Build-time frontend env vars (`frontend/.env.production`)
 

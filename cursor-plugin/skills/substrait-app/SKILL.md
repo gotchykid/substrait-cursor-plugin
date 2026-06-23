@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.06.23.061341
+version: 2026.06.23.235121
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s) — a backend/ that serves GET /health on port 8000 (FastAPI in the scaffold) with a cicd/Dockerfile.backend and Flyway migrations, plus an optional React+Vite+Tailwind frontend/ with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -39,8 +39,9 @@ Hard rules — violating any of these fails validation or the deploy:
 1. **Ship a backend Dockerfile** (`cicd/Dockerfile.backend`, `cicd/Dockerfile`, or
    `backend/Dockerfile`). It must `EXPOSE 8000`, serve **`GET /health`** (200, the
    readiness probe), and expose the API under **`/api`** (the ingress routes `/api` to
-   the backend; everything else goes to the frontend). The scaffold's backend is FastAPI,
-   but any stack meeting this contract works.
+   the backend; everything else goes to the frontend, or to the backend when you ship no
+   `frontend/` — see "Frontend" below). The scaffold's backend is FastAPI, but any stack
+   meeting this contract works.
 2. **Ship a frontend Dockerfile** (`cicd/Dockerfile.frontend` or `frontend/Dockerfile`)
    **whenever you include `frontend/`** — it must serve the built SPA on **port 80**.
 3. **Build deps wheels-only.** The scaffold's `cicd/Dockerfile.backend` uses
@@ -94,6 +95,11 @@ A frontend is optional but, when present, is **deployed alongside the backend** 
 same sandbox namespace behind **one ingress host**: `/api` → backend, everything else →
 frontend. The standard stack is **React + Vite + Tailwind CSS** — start from
 `reference/templates/frontend/`.
+
+If you ship **no `frontend/`**, the platform routes *all* traffic (including `/`) to the
+backend, so a backend-only app must serve its own root/pages itself — a pure-API backend
+will return its own 404 on `/` (the app is reachable, just rootless). No frontend
+Dockerfile is needed in that case.
 
 Call the backend **same-origin via relative `/api` paths** (e.g. `fetch("/api/...")`).
 Do **not** hardcode an absolute API URL — the scaffold's `cicd/Dockerfile.frontend`
