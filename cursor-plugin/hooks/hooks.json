@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "./scripts/substrait-update-check-cursor.sh"
+      }
+    ]
+  }
+}

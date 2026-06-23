@@ -1,0 +1,16 @@
+{
+  "name": "substrait",
+  "owner": {
+    "name": "gotchykid"
+  },
+  "metadata": {
+    "description": "Substrait platform tooling for Cursor — build apps to the upload/deploy contract and ship them from the editor."
+  },
+  "plugins": [
+    {
+      "name": "substrait",
+      "source": "cursor-plugin",
+      "description": "Build and deploy apps on the Substrait platform from Cursor: the substrait-app skill plus /substrait:link and /substrait:deploy."
+    }
+  ]
+}
