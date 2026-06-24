@@ -18,6 +18,11 @@ from there. They self-locate their shared helper, so they only need to be invoke
 
 2. **Deploy** from the project root:
    `bash <plugin>/scripts/substrait-deploy.sh --watch`
+   The script runs a **compliance preflight** before packaging — it halts (without
+   uploading) if the repo isn't Substrait-compliant (missing backend Dockerfile, a
+   `frontend/` with no frontend Dockerfile, or a stray `k8s/`). If it reports a
+   compliance failure, relay the exact message and help the user fix the repo; do not
+   try to bypass it.
 
 3. **Report the outcome:** the run number and, on success, the live preview URL. If the
    script reports a failure, surface the HTTP status / message and suggest checking the

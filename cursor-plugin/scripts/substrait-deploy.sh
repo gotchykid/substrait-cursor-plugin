@@ -22,6 +22,38 @@ done
 [ -n "$(substrait_token 2>/dev/null)" ] || die "not linked — run /substrait:link first."
 [ -d backend ] || die "no backend/ here — run this from the project root (the dir with backend/, cicd/)."
 
+# Compliance preflight — fail fast & locally on the cheap, high-value parts of the deploy
+# contract before we package and upload anything. This MIRRORS the server's authoritative
+# check (`infra.validate_app`): a backend Dockerfile is required; a frontend one too when
+# a frontend/ is shipped; k8s/ is platform-owned and must not be present. The server still
+# runs the full (incl. behavioural) validation in VALIDATING — this just turns the common
+# failures into an actionable local error instead of a failed remote run.
+#   BACKEND_DOCKERFILES : cicd/Dockerfile.backend, cicd/Dockerfile, backend/Dockerfile
+#   FRONTEND_DOCKERFILES: cicd/Dockerfile.frontend, frontend/Dockerfile
+compliance_preflight() {
+  local f
+  local backend_df=""
+  for f in cicd/Dockerfile.backend cicd/Dockerfile backend/Dockerfile; do
+    if [ -f "$f" ]; then backend_df="$f"; break; fi
+  done
+  [ -n "$backend_df" ] || die "not Substrait-compliant: no backend Dockerfile found — every app must ship one of cicd/Dockerfile.backend, cicd/Dockerfile or backend/Dockerfile (start from the scaffold's cicd/Dockerfile.backend). It must EXPOSE 8000, serve GET /health, and your API under /api. Fix this and re-run /substrait:deploy."
+
+  if [ -d frontend ]; then
+    local frontend_df=""
+    for f in cicd/Dockerfile.frontend frontend/Dockerfile; do
+      if [ -f "$f" ]; then frontend_df="$f"; break; fi
+    done
+    [ -n "$frontend_df" ] || die "not Substrait-compliant: frontend/ is present but ships no Dockerfile — add one of cicd/Dockerfile.frontend or frontend/Dockerfile (start from the scaffold's cicd/Dockerfile.frontend). It must serve the built SPA on port 80. Fix this and re-run /substrait:deploy."
+  fi
+
+  [ -d k8s ] || return 0
+  die "not Substrait-compliant: a k8s/ directory is present — the platform owns the Kubernetes manifests and discards anything you ship there. Remove k8s/ and re-run /substrait:deploy."
+}
+
+echo "Checking Substrait compliance…"
+compliance_preflight
+echo "Compliance OK."
+
 # package DEST — zip the project root, source only. Prefers `zip`; on a stock Windows /
 # Git Bash machine (which has no `zip`) it stages a clean copy with `tar` — reusing the
 # same exclude list — and compresses it with PowerShell's Compress-Archive. Returns 2 when
