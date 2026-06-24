@@ -12,31 +12,27 @@ SUBSTRAIT_CONFIG_FILE="${SUBSTRAIT_CONFIG_FILE:-.substrait/config.json}"
 # $SUBSTRAIT_PORTAL_URL, a config portal_url, or `substrait-link.sh save --portal-url`.
 SUBSTRAIT_DEFAULT_PORTAL="https://api.substrait.build"
 
-# _json_get FILE KEY -> prints the string value, or exits 1 if absent. Uses python3
-# (always present in a Claude Code env) so we need no jq dependency.
-_json_get() {
-  python3 - "$1" "$2" <<'PY' 2>/dev/null
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        v = json.load(f).get(sys.argv[2])
-except Exception:
-    sys.exit(1)
-if v is None:
-    sys.exit(1)
-print(v)
-PY
+# _json_field KEY — read a JSON object from stdin, print obj[KEY]. Exit 1 if absent.
+# Used to pull fields out of API response bodies (the device-link start/poll payloads)
+# and config files. Pure shell on purpose: the only guaranteed runtime here is the bash
+# that's already executing this script (Git Bash on Windows), so we depend on nothing
+# beyond grep/sed/head — no python3 (absent, or a silent App-Execution-Alias stub, on many
+# Windows and Node-only dev machines) and no jq. The values we parse are simple and
+# server-controlled (tokens, slugs, hostnames, URLs, integers, enum states, run ids) with
+# no nested quotes or escapes, so a flat first-match extractor is reliable. Captures stdin
+# into a var first so it can make two passes (string value, then number value).
+_json_field() {
+  local key="$1" body out
+  body="$(cat)"
+  out="$(printf '%s' "$body" | grep -o "\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -1)"
+  if [ -n "$out" ]; then printf '%s' "$out" | sed -E 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//'; return 0; fi
+  out="$(printf '%s' "$body" | grep -o "\"$key\"[[:space:]]*:[[:space:]]*-\?[0-9][0-9.eE+-]*" | head -1)"
+  if [ -n "$out" ]; then printf '%s' "$out" | sed -E 's/^"[^"]*"[[:space:]]*:[[:space:]]*//'; return 0; fi
+  return 1
 }
 
-# _json_field KEY — read a JSON object from stdin, print obj[KEY]. Exit 1 if absent/null.
-# Used to pull fields out of API response bodies (the device-link start/poll payloads).
-# Uses `python3 -c` (not a heredoc) so stdin stays free for the piped JSON data.
-_json_field() {
-  python3 -c 'import json,sys
-try: v = json.load(sys.stdin).get(sys.argv[1])
-except Exception: sys.exit(1)
-sys.exit(1) if v is None else print(v)' "$1" 2>/dev/null
-}
+# _json_get FILE KEY -> prints the value, or exits 1 if the file or key is absent.
+_json_get() { [ -f "$1" ] || return 1; _json_field "$2" < "$1"; }
 
 substrait_portal_url() {
   if [ -n "${SUBSTRAIT_PORTAL_URL:-}" ]; then printf '%s' "${SUBSTRAIT_PORTAL_URL%/}"; return 0; fi

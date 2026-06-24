@@ -23,14 +23,13 @@ _write_config() {
   local portal="$1" token="$2" slug="${3:-}" host="${4:-}"
   mkdir -p .substrait
   umask 177
-  python3 - "$SUBSTRAIT_CONFIG_FILE" "${portal%/}" "$token" "$slug" "$host" <<'PY'
-import json, sys
-path, portal, token, slug, host = sys.argv[1:6]
-cfg = {"portal_url": portal, "token": token}
-if slug: cfg["slug"] = slug
-if host: cfg["host"] = host
-json.dump(cfg, open(path, "w"), indent=2)
-PY
+  # Build the JSON by hand (no python): these are values we control — a portal URL, an
+  # sbd_ token, a slug and a hostname — none of which contain JSON-special characters.
+  { printf '{\n  "portal_url": "%s",\n  "token": "%s"' "${portal%/}" "$token"
+    [ -n "$slug" ] && printf ',\n  "slug": "%s"' "$slug"
+    [ -n "$host" ] && printf ',\n  "host": "%s"' "$host"
+    printf '\n}\n'
+  } > "$SUBSTRAIT_CONFIG_FILE"
   chmod 600 "$SUBSTRAIT_CONFIG_FILE"
   if [ -f .gitignore ] && ! grep -qx '.substrait/' .gitignore 2>/dev/null; then
     printf '\n# Substrait CLI link state\n.substrait/\n' >> .gitignore
@@ -106,15 +105,11 @@ cmd_save() {
   # Verify the token + discover the app it's bound to, then cache slug/host.
   substrait_call GET /api/deploy/app || exit $?
   [ "${SUBSTRAIT_STATUS:-}" = "200" ] || die "token rejected (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
-  python3 - "$SUBSTRAIT_CONFIG_FILE" "$SUBSTRAIT_BODY" <<'PY'
-import json, sys
-path, body = sys.argv[1], sys.argv[2]
-cfg = json.load(open(path)); p = json.loads(body)
-cfg["slug"] = p["slug"]
-cfg["host"] = p.get("preview_hostname") or (p["slug"] + ".apps.substrait.build")
-json.dump(cfg, open(path, "w"), indent=2)
-print(f"Linked this project to {p['slug']} (https://{cfg['host']}). Run /substrait:deploy to ship it.")
-PY
+  local slug host
+  slug="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field slug)"
+  host="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field preview_hostname)"; host="${host:-${slug}.apps.substrait.build}"
+  _write_config "$portal" "$token" "$slug" "$host"   # re-write with the discovered slug/host
+  echo "Linked this project to ${slug:-the app} (https://$host). Run /substrait:deploy to ship it."
 }
 
 cmd_status() {
@@ -127,12 +122,11 @@ cmd_status() {
   fi
   substrait_call GET /api/deploy/app
   if [ $? -eq 0 ] && [ "${SUBSTRAIT_STATUS:-}" = "200" ]; then
-    python3 - "$SUBSTRAIT_BODY" "$portal" <<'PY'
-import json, sys
-p = json.loads(sys.argv[1])
-host = p.get("preview_hostname") or (p["slug"] + ".apps.substrait.build")
-print(f"Linked to {p['slug']} ({p.get('display_name','')}) on {sys.argv[2]} — https://{host}")
-PY
+    local slug display host
+    slug="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field slug)"
+    display="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field display_name)"
+    host="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field preview_hostname)"; host="${host:-${slug}.apps.substrait.build}"
+    echo "Linked to $slug ($display) on $portal — https://$host"
   else
     echo "Configured for $portal, but the token was rejected (HTTP ${SUBSTRAIT_STATUS:-?}) — re-run /substrait:link."
   fi
