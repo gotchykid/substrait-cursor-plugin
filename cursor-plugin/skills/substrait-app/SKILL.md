@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.06.23.235121
+version: 2026.06.24.142833
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s) — a backend/ that serves GET /health on port 8000 (FastAPI in the scaffold) with a cicd/Dockerfile.backend and Flyway migrations, plus an optional React+Vite+Tailwind frontend/ with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
