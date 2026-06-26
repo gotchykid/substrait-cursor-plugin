@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.06.24.142833
+version: 2026.06.26.124603
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s) — a backend/ that serves GET /health on port 8000 (FastAPI in the scaffold) with a cicd/Dockerfile.backend and Flyway migrations, plus an optional React+Vite+Tailwind frontend/ with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -64,8 +64,14 @@ or configure Postgres/SQLite/etc.
 Secrets are injected via the `app-secrets` Kubernetes Secret — read them from env:
 
 - `DATABASE_URL` — OceanBase, **MySQL-wire compatible** (`mysql://user:pass@host:2881/db`).
-  Use the `asyncmy` driver with `%s` placeholders. It is **not** PostgreSQL — no
-  `asyncpg`, no `$1`. See `reference/templates/backend/main.py` for the connection pattern.
+  Use a **MySQL** driver, never PostgreSQL (no `asyncpg`, no `$1`).
+  - **Python (scaffold):** `asyncmy` with `%s` placeholders — see
+    `reference/templates/backend/main.py`.
+  - **Go / other stacks:** `DATABASE_URL` is a `mysql://` **URL** — convert it to your
+    driver's DSN. For Go's `go-sql-driver/mysql` you must wrap the address in `tcp(...)`;
+    a bare `host:port` fails at startup with `default addr for network '…:2881' unknown`.
+    Full snippet + a Go backend Dockerfile: `reference/deploy-contract.md` → *Connecting
+    from Go & other stacks*.
 - `REDIS_URL`
 - `JWT_SECRET`
 

@@ -150,8 +150,10 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
 - Database is **always OceanBase** — the platform provisions a per-app OceanBase DB and
   injects `DATABASE_URL`. There is no other database option (no Postgres/SQLite).
 - Read secrets from env (injected via the `app-secrets` Secret):
-  - `DATABASE_URL` — OceanBase (MySQL-wire), `mysql://user:pass@host:2881/db`. Use
-    `asyncmy` + `%s` placeholders. **Not** PostgreSQL — no `asyncpg`, no `$1`.
+  - `DATABASE_URL` — OceanBase (MySQL-wire), `mysql://user:pass@host:2881/db`. Use a
+    **MySQL** driver, never PostgreSQL (`asyncpg`/`$1`). Python (scaffold): `asyncmy` +
+    `%s` placeholders. Go/other stacks: convert the `mysql://` URL to your driver's DSN —
+    see *Connecting from Go & other stacks* below.
   - `REDIS_URL`
   - `JWT_SECRET`
 - Declare your app's **own** config (API keys, flags, third-party creds) in
@@ -169,6 +171,71 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
 - Build-time frontend config (`VITE_*`) goes in a committed **`frontend/.env.production`**
   (public, non-secret values only — it's baked into the JS bundle). Leave `VITE_API_URL`
   unset (the frontend Dockerfile forces `""`). See *Build-time frontend env vars* above.
+
+## Connecting from Go & other stacks
+
+The contract is behavioural, so a Go (or Node, Rust, …) backend is fine as long as it
+`EXPOSE`s 8000, serves `GET /health`, routes its API under `/api`, and ships a Dockerfile.
+Two things bite non-Python backends:
+
+**1. `DATABASE_URL` is a `mysql://` URL — convert it to your driver's DSN.** It points at
+OceanBase (MySQL-wire), e.g.
+`mysql://app_x%40substrait:pw@oceanbase.substrait.svc.cluster.local:2881/app_x` (the `%40`
+is a URL-encoded `@` in the username). Go's `go-sql-driver/mysql` does **not** accept that
+URL form: it needs `user:pass@tcp(host:port)/db`. Passing the host bare yields the startup
+error `default addr for network 'oceanbase.substrait.svc.cluster.local:2881' unknown`
+(the driver reads `host:port` as a network name). Parse the URL and rebuild the DSN —
+`net/url` decodes the `%40` for you:
+
+```go
+import (
+    "database/sql"
+    "fmt"
+    "net/url"
+    "os"
+
+    _ "github.com/go-sql-driver/mysql"
+)
+
+func openDB() (*sql.DB, error) {
+    u, err := url.Parse(os.Getenv("DATABASE_URL")) // mysql://user:pass@host:2881/db
+    if err != nil {
+        return nil, err
+    }
+    pw, _ := u.User.Password()
+    // u.Host = "host:2881", u.Path = "/db"; the tcp(...) wrapper is required.
+    dsn := fmt.Sprintf("%s:%s@tcp(%s)%s?parseTime=true", u.User.Username(), pw, u.Host, u.Path)
+    return sql.Open("mysql", dsn)
+}
+```
+
+(Node's `mysql2`, Rust's `sqlx`, etc. accept the `mysql://` URL directly — only the Go
+driver needs the `tcp(...)` rewrite. Whatever the stack, it's **MySQL**, never Postgres.)
+
+**2. DDL stays in Flyway migrations**, same as every stack: schema lives in
+`backend/resources/db/migration/V*.sql` (MySQL/OceanBase dialect); your code only reads and
+writes rows — it never `CREATE TABLE`s.
+
+A minimal Go backend Dockerfile (`cicd/Dockerfile.backend`, built from the **repo root**,
+so `COPY` paths are repo-root-relative):
+
+```dockerfile
+FROM golang:1.23 AS build
+WORKDIR /src
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ ./
+RUN CGO_ENABLED=0 go build -o /app/server .
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /app/server /server
+EXPOSE 8000
+CMD ["/server"]
+```
+
+Serve `GET /health` (200, the readiness probe) and your API under `/api/...` on port 8000,
+exactly as the FastAPI scaffold does. Everything else in this contract — one ingress host,
+`/api` routing, `backend/.env.example` for custom config, source-only zip — is unchanged.
 
 ## Pre-upload checklist
 
