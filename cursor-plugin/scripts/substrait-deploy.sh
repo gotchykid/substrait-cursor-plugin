@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Package the current project (source only) and deploy it to its linked Substrait app.
-#   --watch   poll the deploy until it finishes and print the preview URL
-# The app is determined by the deploy token in .substrait/config.json (run /substrait:link
-# first). Run from the project root (the dir containing backend/, frontend/, cicd/).
+#   --watch          poll the deploy until it finishes and print the preview URL
+#   --stack <name>   override the recorded backend stack (default: auto-detected from
+#                    backend/ — e.g. fastapi, python, node, go, rust, ruby, java, php, dotnet)
+# The platform is stack-agnostic (any Dockerfile that EXPOSEs 8000 + serves /health works);
+# the stack is just a label shown in the portal. The app is determined by the deploy token
+# in .substrait/config.json (run /substrait:link first). Run from the project root (the dir
+# containing backend/, frontend/, cicd/).
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -12,12 +16,39 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 die() { echo "Error: $*" >&2; exit 1; }
 
 WATCH=0
+STACK=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --watch) WATCH=1; shift ;;
+    --stack) shift; STACK="${1:-}"; [ -n "$STACK" ] || die "--stack needs a value (e.g. node, go, fastapi)"; shift ;;
+    --stack=*) STACK="${1#*=}"; shift ;;
     *) die "unknown arg: $1" ;;
   esac
 done
+
+# detect_stack — best-effort guess of the backend stack from declaration files, so the
+# label shown in the portal reflects what was actually shipped without the user passing
+# --stack. Scans backend/ first (where the contract puts the backend), then the repo root.
+# Pure file checks (+ one grep) so it stays dependency-free on Git Bash. Prints "other"
+# when nothing matches; the platform accepts any short lowercase label regardless.
+detect_stack() {
+  local d
+  for d in backend .; do
+    [ -d "$d" ] || continue
+    if [ -f "$d/go.mod" ]; then echo go; return; fi
+    if [ -f "$d/Cargo.toml" ]; then echo rust; return; fi
+    if [ -f "$d/requirements.txt" ] || [ -f "$d/pyproject.toml" ]; then
+      if grep -qi 'fastapi' "$d/requirements.txt" "$d/pyproject.toml" 2>/dev/null; then echo fastapi; else echo python; fi
+      return
+    fi
+    if [ -f "$d/Gemfile" ]; then echo ruby; return; fi
+    if [ -f "$d/composer.json" ]; then echo php; return; fi
+    if [ -f "$d/pom.xml" ] || [ -f "$d/build.gradle" ] || [ -f "$d/build.gradle.kts" ]; then echo java; return; fi
+    if ls "$d"/*.csproj >/dev/null 2>&1; then echo dotnet; return; fi
+    if [ -f "$d/package.json" ]; then echo node; return; fi
+  done
+  echo other
+}
 
 [ -n "$(substrait_token 2>/dev/null)" ] || die "not linked — run /substrait:link first."
 [ -d backend ] || die "no backend/ here — run this from the project root (the dir with backend/, cicd/)."
@@ -53,6 +84,12 @@ compliance_preflight() {
 echo "Checking Substrait compliance…"
 compliance_preflight
 echo "Compliance OK."
+
+# Resolve the backend stack label: explicit --stack wins, else auto-detect. Lowercased to
+# match the server's accepted shape (a short lowercase slug).
+[ -n "$STACK" ] || STACK="$(detect_stack)"
+STACK="$(printf '%s' "$STACK" | tr '[:upper:]' '[:lower:]')"
+echo "Backend stack: $STACK"
 
 # package DEST — zip the project root, source only. Prefers `zip`; on a stock Windows /
 # Git Bash machine (which has no `zip`) it stages a clean copy with `tar` — reusing the
@@ -108,7 +145,7 @@ echo "Packaged $((size/1024)) KB."
 echo "Deploying…"
 substrait_call POST /api/deploy \
   -F "file=@$zip_path;type=application/zip;filename=upload.zip" \
-  -F "backend_stack=fastapi" || exit $?
+  -F "backend_stack=$STACK" || exit $?
 case "${SUBSTRAIT_STATUS:-}" in
   200|201|202) : ;;
   *) die "deploy failed (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY" ;;

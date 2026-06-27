@@ -23,6 +23,10 @@ from there. They self-locate their shared helper, so they only need to be invoke
    `frontend/` with no frontend Dockerfile, or a stray `k8s/`). If it reports a
    compliance failure, relay the exact message and help the user fix the repo; do not
    try to bypass it.
+   The script also auto-detects the **backend stack** (fastapi/python/node/go/rust/…) from
+   the project and records it on the app as a label — the platform is stack-agnostic, so
+   this only affects what's shown in the portal. If the guess is wrong, pass
+   `--stack <name>` (e.g. `--watch --stack go`).
 
 3. **Report the outcome:** the run number and, on success, the live preview URL. If the
    script reports a failure, surface the HTTP status / message and suggest checking the

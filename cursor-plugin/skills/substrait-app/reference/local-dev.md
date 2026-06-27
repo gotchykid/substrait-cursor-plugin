@@ -2,8 +2,10 @@
 
 Local dev is **not** part of the deploy contract — the platform builds your images,
 provisions OceanBase, runs Flyway, and applies the k8s manifests in a sandbox. None of
-that runs on your machine. But the scaffold is ordinary FastAPI + Vite, so you can run
-it locally with one extra piece: a database.
+that runs on your machine. The commands below assume the default **FastAPI + Vite**
+scaffold; on another stack, run the backend however that stack runs (still on `:8000`,
+reading `DATABASE_URL`) and keep the one piece that's the same for everyone: a
+**MySQL-wire database**.
 
 ## The database: use MySQL/MariaDB, not SQLite
 

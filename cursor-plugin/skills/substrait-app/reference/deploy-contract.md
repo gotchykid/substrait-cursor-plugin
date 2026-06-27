@@ -1,8 +1,9 @@
 # Substrait deploy contract — full reference
 
 You upload **app code plus its Dockerfile(s)**. Your app builds from its **own**
-Dockerfile, so the contract is behavioural — a container that `EXPOSE`s 8000 and serves
-`GET /health` — not stack-locked to FastAPI. The platform owns **only the Kubernetes
+Dockerfile, so the contract is behavioural and **stack-agnostic** — a container that
+`EXPOSE`s 8000 and serves `GET /health`, in any language or framework — not locked to
+FastAPI. The platform owns **only the Kubernetes
 manifests**: it mints the slug and binds namespace, image and ingress host, so you never
 write k8s or deal with the slug. The k8s manifests are never committed into your repo;
 they're materialised at deploy time. The worker:
@@ -26,7 +27,7 @@ they're materialised at deploy time. The worker:
 | `backend/requirements.txt` | scaffold | your backend deps (installed by your Dockerfile) |
 | `backend/.env.example` (or root `.env.example`) | optional | declares custom env vars + secrets; the platform pre-creates them in the app's Settings. Mark secrets with a trailing `# secret` |
 | `backend/resources/db/migration/V*.sql` (or `resources/db/migration`) | optional | Flyway, MySQL/OceanBase dialect |
-| `frontend/` | optional | React + Vite + Tailwind; **deployed** alongside the backend (see Full-stack below) |
+| `frontend/` | optional | any framework that serves on port 80 (scaffold: React + Vite + Tailwind); **deployed** alongside the backend (see Full-stack below) |
 
 **Do not** include `k8s/` — anything you put there is discarded and replaced by the
 platform's manifests. You **do** ship the `cicd/` Dockerfiles; the platform no longer
@@ -40,10 +41,11 @@ host. **You write none of that and never reference the slug.** Your Dockerfile, 
 contrast, is yours — start from the scaffold's `cicd/Dockerfile.backend` and edit it
 freely, as long as the image still `EXPOSE`s 8000 and serves `GET /health`.
 
-### Wheels-only by default
+### Wheels-only by default (Python scaffold only)
 
-The scaffold's `cicd/Dockerfile.backend` installs deps with
-`pip install --only-binary=:all:`. The base is `python:3.12-slim`, which has no C
+This is a convenience of the **Python/FastAPI scaffold**, not a contract rule — ignore it
+if your backend uses another stack. The scaffold's `cicd/Dockerfile.backend` installs deps
+with `pip install --only-binary=:all:`. The base is `python:3.12-slim`, which has no C
 compiler, so a dep with no wheel for this Python would otherwise fall back to a source
 build and die deep in a cryptic compile (surfaced as a `BackoffLimitExceeded` build
 failure). `--only-binary` makes that fail fast and legibly instead. If you genuinely
@@ -143,8 +145,8 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
 
 ## Runtime contract
 
-- Backend is **FastAPI** in the scaffold; the contract itself is behavioural (any stack
-  that meets the points below works, since you own the Dockerfile).
+- Backend is **any language or framework** — you own the Dockerfile, so the contract is
+  purely behavioural (the scaffold happens to use FastAPI). Meet the points below and you're done.
 - Listen on **port 8000**; serve **`GET /health`** (200, the readiness probe) and your
   API under **`/api`** (so the ingress routes it to the backend).
 - Database is **always OceanBase** — the platform provisions a per-app OceanBase DB and
@@ -165,18 +167,20 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
 - All DDL in Flyway migrations — never in application code.
 - Source only in the zip: exclude `node_modules/`, `.venv/`, `dist/`,
   `__pycache__/`, build output. Max size 16 MB (default).
-- Frontend (optional) standard stack is **React + Vite + Tailwind CSS** — see
-  `reference/templates/frontend/`. Ship `cicd/Dockerfile.frontend` (+ `cicd/nginx.conf`)
-  with it; it serves the SPA on port 80. Call the API with relative `/api` paths.
+- Frontend (optional) is **any framework** that builds to a site served on **port 80** —
+  the scaffold uses React + Vite + Tailwind (see `reference/templates/frontend/`), but Vue,
+  Svelte, Astro, plain static HTML, etc. all work. Ship a `cicd/Dockerfile.frontend` that
+  serves it on port 80 (the scaffold uses nginx + `cicd/nginx.conf`). Call the API with
+  relative `/api` paths.
 - Build-time frontend config (`VITE_*`) goes in a committed **`frontend/.env.production`**
   (public, non-secret values only — it's baked into the JS bundle). Leave `VITE_API_URL`
   unset (the frontend Dockerfile forces `""`). See *Build-time frontend env vars* above.
 
-## Connecting from Go & other stacks
+## Other backend stacks
 
-The contract is behavioural, so a Go (or Node, Rust, …) backend is fine as long as it
-`EXPOSE`s 8000, serves `GET /health`, routes its API under `/api`, and ships a Dockerfile.
-Two things bite non-Python backends:
+The contract is behavioural and stack-agnostic, so a Go (or Node, Rust, Ruby, …) backend is
+fine as long as it `EXPOSE`s 8000, serves `GET /health`, routes its API under `/api`, and
+ships a Dockerfile. Two things bite non-Python backends:
 
 **1. `DATABASE_URL` is a `mysql://` URL — convert it to your driver's DSN.** It points at
 OceanBase (MySQL-wire), e.g.
@@ -241,7 +245,7 @@ exactly as the FastAPI scaffold does. Everything else in this contract — one i
 
 - [ ] `cicd/Dockerfile.backend` (or another backend Dockerfile) is present — `EXPOSE 8000`, serves `GET /health`, API under `/api`.
 - [ ] If `frontend/` is present, `cicd/Dockerfile.frontend` (+ `cicd/nginx.conf`) is shipped too — serves the SPA on port 80.
-- [ ] Backend deps install wheels-only (`--only-binary=:all:`), or you've added the toolchain for any source-built dep.
+- [ ] (Python scaffold only) backend deps install wheels-only (`--only-binary=:all:`), or you've added the toolchain for any source-built dep.
 - [ ] Backend API routes are under `/api` (so the ingress routes them to the backend).
 - [ ] Frontend (if any) calls the API via relative `/api` paths, not an absolute URL.
 - [ ] Build-time `VITE_*` vars (if any) are in a committed `frontend/.env.production` — public values only, no secrets, and `VITE_API_URL` is left unset. If `.gitignore` ignores `.env*`, it un-ignores `.env.production`.
