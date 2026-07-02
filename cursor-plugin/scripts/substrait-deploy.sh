@@ -163,12 +163,55 @@ if [ "$WATCH" -ne 1 ]; then
   exit 0
 fi
 
-# 3. Poll the deploy status until this run reaches a terminal state.
+# 3. Poll the deploy status until this run reaches a terminal state, streaming the run's
+#    event log alongside. The events carry the actual build/migration/smoke-test detail
+#    (incl. an 80-line pod-log tail on failures), so when a deploy breaks the error lands
+#    right here in the transcript where the coding agent can read it and fix the app —
+#    no portal round-trip. A backend that predates the events endpoint 404s; we silently
+#    degrade to state-only watching.
 echo "Watching deploy… (Ctrl-C to stop watching; the deploy keeps running)"
 deadline=$(( $(date +%s) + 900 ))   # 15 min ceiling
 last=""
+last_seq=0
+
+# print_events — fetch this run's events newer than $last_seq, print them, advance
+# $last_seq. Heartbeat rows ("BUILD_BACKEND: active (45s/600s)") are elided — they would
+# swamp the transcript and the status poll already shows phase changes. Same flat-grep
+# JSON parsing as the status poll: field order is server-controlled (level precedes
+# message), and message is the one field that may carry escaped quotes/newlines (log
+# tails), so it gets an escape-aware match + unescape.
+print_events() {
+  [ -n "$run_id" ] || return 0
+  substrait_call GET "/api/deploy/runs/$run_id/events?after_seq=$last_seq" || return 0
+  [ "${SUBSTRAIT_STATUS:-}" = "200" ] || return 0
+  local rows max
+  rows="$(printf '%s' "$SUBSTRAIT_BODY" | sed 's/},[[:space:]]*{/}\
+{/g')"
+  # rows are seq-ascending, so the last seq in the body is the high-water mark.
+  max="$(printf '%s' "$rows" | grep -o '"seq"[[:space:]]*:[[:space:]]*[0-9][0-9]*' | grep -o '[0-9][0-9]*$' | tail -1)"
+  printf '%s\n' "$rows" | awk '
+    {
+      lvl=""; msg=""
+      if (match($0, /"level"[[:space:]]*:[[:space:]]*"[^"]*"/)) {
+        s=substr($0,RSTART,RLENGTH); sub(/^"level"[[:space:]]*:[[:space:]]*"/,"",s); sub(/"$/,"",s); lvl=s }
+      if (match($0, /"message"[[:space:]]*:[[:space:]]*"(\\.|[^"\\])*"/)) {
+        s=substr($0,RSTART,RLENGTH); sub(/^"message"[[:space:]]*:[[:space:]]*"/,"",s); sub(/"$/,"",s); msg=s }
+      if (msg == "") next
+      if (msg ~ /\([0-9]+s\/[0-9]+s\)$/) next     # elide heartbeats
+      gsub(/\\r/, "", msg)
+      gsub(/\\n/, "\n        ", msg)              # keep log tails aligned under their event
+      gsub(/\\t/, "    ", msg)
+      gsub(/\\"/, "\"", msg)
+      if (lvl == "error")                        printf "    ✗ %s\n", msg
+      else if (lvl == "warn" || lvl == "warning") printf "    ! %s\n", msg
+      else                                        printf "      %s\n", msg
+    }'
+  [ -n "$max" ] && last_seq="$max"
+}
+
 while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 8
+  print_events
   substrait_call GET /api/deploy/status || continue
   [ "${SUBSTRAIT_STATUS:-}" = "200" ] || continue
   # Split the array into one object per line, then find the row whose id == run_id and
@@ -182,9 +225,13 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
       if (id==rid) { print st; found=1; exit } }
     END { if (!found) print first }')"
   if [ "$state" != "$last" ] && [ -n "$state" ]; then echo "  • $state"; last="$state"; fi
+  # Terminal states: drain any events written after our last fetch (the failure detail
+  # usually lands in the same instant as the state flip) before reporting.
   case "$state" in
-    PREVIEW_LIVE) echo "✅ Live: https://$host"; exit 0 ;;
-    FAILED|ERROR) die "deploy failed (state $state). Check the portal logs for run #$run_id." ;;
+    PREVIEW_LIVE) print_events; echo "✅ Live: https://$host"; exit 0 ;;
+    FAILED|ERROR)
+      print_events
+      die "deploy failed (state $state) — the ✗ events above say why. Fix the app and re-run /substrait:deploy (full log in the portal, run #$run_id)." ;;
   esac
 done
 echo "Still running after 15 min — check the portal for run #$run_id (https://$host when live)."

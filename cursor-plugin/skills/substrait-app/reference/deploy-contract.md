@@ -41,6 +41,17 @@ host. **You write none of that and never reference the slug.** Your Dockerfile, 
 contrast, is yours — start from the scaffold's `cicd/Dockerfile.backend` and edit it
 freely, as long as the image still `EXPOSE`s 8000 and serves `GET /health`.
 
+### The backend runs capless — stock nginx won't start there
+
+The backend container runs with **all Linux capabilities dropped**. A capless process
+(uvicorn, a Go binary, etc.) is fine. **Stock `nginx` is not**: its entrypoint chowns
+`/var/cache/nginx` at startup, which needs `CAP_CHOWN`, so it dies with
+`nginx: [emerg] chown("/var/cache/nginx/...") Operation not permitted` and crashloops.
+If your backend is a static server, build it `FROM nginxinc/nginx-unprivileged` (runs
+rootless with no startup chown — keep `listen 8000`), or move the static content to a
+`frontend/` slot, which grants nginx the capabilities it needs. The deploy is rejected up
+front with this fix if a backend Dockerfile is `FROM nginx`.
+
 ### Wheels-only by default (Python scaffold only)
 
 This is a convenience of the **Python/FastAPI scaffold**, not a contract rule — ignore it
