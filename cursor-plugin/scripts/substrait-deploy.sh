@@ -158,12 +158,30 @@ host="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field preview_hostname)"
 [ -n "$host" ] || { slug="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field slug)"; host="${slug}.apps.substrait.build"; }
 echo "Deploy queued — run #$run_id."
 
+# 3. Submit the endpoint inventory, if the editor agent generated one (the
+#    /substrait:deploy command writes .substrait/endpoints.json before running this
+#    script — see the command doc for the shape). Runs AFTER the deploy fields above are
+#    parsed out of SUBSTRAIT_BODY (substrait_call overwrites the globals). Best-effort
+#    and non-fatal: the deploy is already queued, a bare terminal run has no inventory,
+#    and an older backend 404s — none of that should fail the deploy. The server
+#    replaces the whole inventory per submit.
+ENDPOINTS_FILE=".substrait/endpoints.json"
+if [ -f "$ENDPOINTS_FILE" ]; then
+  substrait_call POST /api/deploy/endpoints \
+    -H "Content-Type: application/json" --data-binary "@$ENDPOINTS_FILE"
+  case "${SUBSTRAIT_STATUS:-}" in
+    200|201) echo "Endpoint inventory submitted ($(grep -c '"path"' "$ENDPOINTS_FILE" | tr -d ' ') endpoints)." ;;
+    404) : ;;  # backend predates the endpoints API — silently skip
+    *) echo "Warning: endpoint inventory not accepted (HTTP ${SUBSTRAIT_STATUS:-?}): ${SUBSTRAIT_BODY:-}" >&2 ;;
+  esac
+fi
+
 if [ "$WATCH" -ne 1 ]; then
   echo "Track it in the portal; once live it'll be at https://$host"
   exit 0
 fi
 
-# 3. Poll the deploy status until this run reaches a terminal state, streaming the run's
+# 4. Poll the deploy status until this run reaches a terminal state, streaming the run's
 #    event log alongside. The events carry the actual build/migration/smoke-test detail
 #    (incl. an 80-line pod-log tail on failures), so when a deploy breaks the error lands
 #    right here in the transcript where the coding agent can read it and fix the app —

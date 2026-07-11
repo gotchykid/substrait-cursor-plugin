@@ -16,7 +16,36 @@ from there. They self-locate their shared helper, so they only need to be invoke
    If this project isn't linked, stop and tell the user to run `/substrait:link` first
    (deploys are authorised by the app-scoped token saved during linking).
 
-2. **Deploy** from the project root:
+2. **Generate the endpoint inventory** — only when the backend serves no OpenAPI spec.
+   After each deploy goes live, the platform harvests the app's own spec
+   (`/openapi.json` or `/api/openapi.json` — FastAPI serves one by default) and that
+   takes precedence, so for those backends **skip this step**. For stacks without a
+   spec (plain Go/Node/etc. routers), study the backend source (routes, routers,
+   controllers — whatever the stack uses) and write **`.substrait/endpoints.json`**
+   listing every HTTP endpoint the backend serves. The deploy script submits this file
+   to Substrait after the upload, and the portal shows it on the app's **API** tab.
+   Exact shape:
+
+   ```json
+   {
+     "endpoints": [
+       {"method": "GET", "path": "/api/items", "description": "List items"},
+       {"method": "POST", "path": "/api/items", "description": "Create an item"},
+       {"method": "GET", "path": "/health", "description": "Readiness probe"}
+     ]
+   }
+   ```
+
+   Rules: `method` is one of GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS, `WS` for websocket
+   routes, or `*` for catch-alls; `path` starts with `/` and keeps route parameters in
+   the framework-neutral `{param}` form (≤ 200 chars, no whitespace); `description` is
+   one short sentence (≤ 300 chars, optional); at most 300 endpoints. List concrete
+   routes the code actually registers — don't invent or pad. Regenerate the file on
+   every deploy (the server replaces the whole inventory, so removed endpoints drop
+   out). If you genuinely cannot read the backend (e.g. it's a compiled artifact),
+   skip this step — the script deploys fine without the file.
+
+3. **Deploy** from the project root:
    `bash <plugin>/scripts/substrait-deploy.sh --watch`
    The script runs a **compliance preflight** before packaging — it halts (without
    uploading) if the repo isn't Substrait-compliant (missing backend Dockerfile, a
@@ -28,7 +57,7 @@ from there. They self-locate their shared helper, so they only need to be invoke
    this only affects what's shown in the portal. If the guess is wrong, pass
    `--stack <name>` (e.g. `--watch --stack go`).
 
-3. **Report the outcome:** the run number and, on success, the live preview URL. If the
+4. **Report the outcome:** the run number and, on success, the live preview URL. If the
    script reports a failure, surface the HTTP status / message and suggest checking the
    portal logs for that run — do not retry automatically.
 
