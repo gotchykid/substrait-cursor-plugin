@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.07.11.120000
+version: 2026.07.11.160000
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -186,6 +186,15 @@ and point `DATABASE_URL` at it. See `reference/local-dev.md` for the full guide.
 
 See `reference/deploy-contract.md` for the full spec, `reference/local-dev.md` for running
 locally, and `reference/templates/` for the copy-paste-ready FastAPI + React scaffold.
+
+## Project memory (CLAUDE.md)
+
+Linked projects carry a marker-delimited **"Substrait deployment" block** in their
+`CLAUDE.md` (`AGENTS.md` in Cursor) with the contract essentials, so sessions that never
+load this skill still build compliant changes. The plugin's link/deploy scripts maintain
+it deterministically (the content is this skill's `reference/claude-md-snippet.md`):
+`link` adds it, `deploy` refreshes an outdated one. Don't hand-edit inside the block —
+it's replaced on update — and treat a user's deletion of the block as an opt-out.
 
 ## Updating this skill
 

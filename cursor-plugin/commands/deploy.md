@@ -11,6 +11,8 @@ The bundled scripts live in this plugin's `scripts/` directory. Resolve the plug
 (if `$CURSOR_PLUGIN_ROOT` is set, use it; otherwise locate the directory containing
 `substrait-deploy.sh` under the installed `substrait` Cursor plugin) and run the scripts
 from there. They self-locate their shared helper, so they only need to be invoked by path.
+**Always prefix script invocations with `SUBSTRAIT_MEMO_FILE=AGENTS.md`** — the scripts
+maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `CLAUDE.md`.
 
 1. **Check the link:** run `bash <plugin>/scripts/substrait-link.sh status`.
    If this project isn't linked, stop and tell the user to run `/substrait:link` first

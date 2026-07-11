@@ -86,6 +86,50 @@ substrait_anon_call() {
   return $rc
 }
 
+# ── Project memory (CLAUDE.md) ──────────────────────────────────────────────────
+# The plugin maintains a marker-delimited "Substrait deployment" block in the
+# project's agent-memory file, so every future session in the project knows the
+# deploy contract without the skill being invoked. The block's CONTENT is the
+# bundled skill's reference/claude-md-snippet.md (canonical, synced from the
+# monorepo — including its BEGIN/END markers and version tag); this helper only
+# places it. Target file defaults to CLAUDE.md; Cursor invocations override via
+# SUBSTRAIT_MEMO_FILE=AGENTS.md.
+_SUBSTRAIT_SNIPPET="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../skills/substrait-app/reference/claude-md-snippet.md"
+
+# substrait_write_memo MODE
+#   ensure  — add the block (creating the file if needed) or refresh an outdated one.
+#             Used by link: linking is the moment a project becomes a Substrait project.
+#   refresh — only update an EXISTING outdated block; never (re-)add one. Used by
+#             deploy, so deleting the block is a durable opt-out.
+# Version detection is the BEGIN marker line itself (it carries "(vN)"): if the
+# target already contains the snippet's exact first line, it's current — no rewrite,
+# no mtime churn. Always returns 0: memo maintenance must never fail a link/deploy.
+substrait_write_memo() {
+  local mode="$1" target="${SUBSTRAIT_MEMO_FILE:-CLAUDE.md}"
+  [ -f "$_SUBSTRAIT_SNIPPET" ] || return 0
+  local begin='<!-- BEGIN substrait-app contract'
+  local ver_line; ver_line="$(head -1 "$_SUBSTRAIT_SNIPPET")"
+  if [ -f "$target" ] && grep -qF "$begin" "$target"; then
+    grep -qxF "$ver_line" "$target" && return 0
+    local tmp; tmp="$(mktemp)" || return 0
+    awk -v s="$_SUBSTRAIT_SNIPPET" '
+      index($0, "<!-- BEGIN substrait-app contract") {
+        inblock=1
+        while ((getline line < s) > 0) print line
+        close(s); next
+      }
+      index($0, "<!-- END substrait-app contract") { inblock=0; next }
+      !inblock { print }
+    ' "$target" > "$tmp" && mv "$tmp" "$target" && \
+      echo "Updated the Substrait section in $target."
+  else
+    [ "$mode" = "refresh" ] && return 0
+    { [ -s "$target" ] && printf '\n'; cat "$_SUBSTRAIT_SNIPPET"; } >> "$target" && \
+      echo "Recorded the Substrait deploy contract in $target (so future sessions know this is a Substrait app)."
+  fi
+  return 0
+}
+
 # substrait_open_url URL — best-effort open in the user's browser; silent if no opener.
 substrait_open_url() {
   if command -v open >/dev/null 2>&1; then open "$1" >/dev/null 2>&1   # macOS

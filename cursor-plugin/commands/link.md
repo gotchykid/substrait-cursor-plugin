@@ -11,6 +11,8 @@ The bundled scripts live in this plugin's `scripts/` directory. Resolve the plug
 (if `$CURSOR_PLUGIN_ROOT` is set, use it; otherwise locate the directory containing
 `substrait-link.sh` under the installed `substrait` Cursor plugin) and run the scripts from
 there. They self-locate their shared helper, so they only need to be invoked by path.
+**Always prefix script invocations with `SUBSTRAIT_MEMO_FILE=AGENTS.md`** — the scripts
+maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `CLAUDE.md`.
 
 1. **Check current state:** run `bash <plugin>/scripts/substrait-link.sh status`.
    If it's already linked and the user only wanted to check, you're done.
@@ -35,3 +37,10 @@ there. They self-locate their shared helper, so they only need to be invoked by 
 
 4. **Confirm** the linked app + preview URL, and remind the user they can now run
    `/substrait:deploy` to ship the current code.
+
+Note: on a successful link, the script also records a **"Substrait deployment" section
+in the project's `AGENTS.md`** (creating the file if needed; that's why the
+`SUBSTRAIT_MEMO_FILE=AGENTS.md` prefix matters) so every future session knows the deploy
+contract without loading the skill. It's a marker-delimited block the plugin keeps
+current on later deploys; deleting the whole block opts the project out — don't re-add
+it by hand if the user removed it.

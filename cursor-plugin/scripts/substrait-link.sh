@@ -86,6 +86,7 @@ cmd_login() {
   slug="$(printf '%s'  "$SUBSTRAIT_BODY" | _json_field slug)"
   host="$(printf '%s'  "$SUBSTRAIT_BODY" | _json_field host)"
   _write_config "$portal" "$token" "$slug" "$host"
+  substrait_write_memo ensure
   echo "Linked this project to ${slug:-the app}${host:+ (https://$host)}. Run /substrait:deploy to ship it."
 }
 
@@ -109,6 +110,7 @@ cmd_save() {
   slug="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field slug)"
   host="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field preview_hostname)"; host="${host:-${slug}.apps.substrait.build}"
   _write_config "$portal" "$token" "$slug" "$host"   # re-write with the discovered slug/host
+  substrait_write_memo ensure
   echo "Linked this project to ${slug:-the app} (https://$host). Run /substrait:deploy to ship it."
 }
 

@@ -225,6 +225,10 @@ if [ -f "$ENDPOINTS_FILE" ]; then
   fi
 fi
 
+# Keep the project's CLAUDE.md "Substrait deployment" block current (only if one
+# exists — its removal is a durable opt-out; /substrait:link is what adds it).
+substrait_write_memo refresh
+
 if [ "$WATCH" -ne 1 ]; then
   echo "Track it in the portal; once live it'll be at https://$host"
   exit 0
