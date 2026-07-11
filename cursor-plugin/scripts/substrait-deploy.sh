@@ -69,10 +69,14 @@ endpoints_stale() {
   [ -n "$(find backend -type f -newer "$ENDPOINTS_FILE" 2>/dev/null | head -1)" ]
 }
 
-# submit_endpoints — POST the inventory file. Non-2xx is reported but the caller
-# decides whether that's fatal (it isn't during a deploy; it is in `endpoints` mode).
+# submit_endpoints [RUN_ID] — POST the inventory file, stamped with the deploy run it
+# describes when one is known (the portal flags inventories whose run never went live).
+# Non-2xx is reported but the caller decides whether that's fatal (it isn't during a
+# deploy; it is in `endpoints` mode).
 submit_endpoints() {
-  substrait_call POST /api/deploy/endpoints \
+  local path="/api/deploy/endpoints"
+  [ -n "${1:-}" ] && path="$path?run_id=$1"
+  substrait_call POST "$path" \
     -H "Content-Type: application/json" --data-binary "@$ENDPOINTS_FILE"
   case "${SUBSTRAIT_STATUS:-}" in
     200|201)
@@ -217,7 +221,7 @@ if [ -f "$ENDPOINTS_FILE" ]; then
       echo "  (Or delete the file if the backend serves an OpenAPI spec — the platform harvests that automatically.)"
     } >&2
   else
-    submit_endpoints || true
+    submit_endpoints "$run_id" || true
   fi
 fi
 
