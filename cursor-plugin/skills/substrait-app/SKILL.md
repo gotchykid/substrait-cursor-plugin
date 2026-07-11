@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.06.26.162117
+version: 2026.07.11.120000
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -88,6 +88,24 @@ THIRD_PARTY_API_KEY=     # secret      ← mark a secret with a trailing "# secr
 - Read them at runtime from the environment; never commit real secret values.
 - Re-uploading only adds new keys — it never overwrites a value the user has set in the portal.
 
+## User identity (Google SSO)
+
+If the app owner enables **Google single sign-on** (the portal's Access tab), the
+platform's auth proxy injects the signed-in user's identity into every gated backend
+request — **`X-Forwarded-Email`** (plus `X-Forwarded-User`) — so an app that needs to
+know who's using it needs no OAuth flow or login page of its own: read the header and
+key user data on the email. Three rules:
+
+- Trustworthy **only while SSO is enabled** (the proxy strips client-sent values; with
+  SSO off, anyone can send these headers) — and absent on public paths and in local dev,
+  so degrade gracefully (anonymous mode) when the header is missing.
+- The **browser never sees the headers** — expose a backend endpoint (e.g. `/api/me`,
+  the scaffold ships one) for the frontend to ask "who am I?".
+- SSO answers *who*; anything finer (roles, per-user rows) is your app's logic.
+
+See `reference/deploy-contract.md` → *User identity under Google SSO* for the full trust
+model and snippet.
+
 ## Frontend (full-stack)
 
 A frontend is optional but, when present, is **deployed alongside the backend** in the same
@@ -131,8 +149,9 @@ apply if you pick another stack:
   `pip install --only-binary=:all:` on a compiler-less `python:3.12-slim` base, so a dep with
   no wheel fails fast and legibly instead of dying in a cryptic source build. Need a source
   build? Pin a version that ships a wheel, or add the toolchain and drop the flag.
-- **Heavy deps / GPU torch.** kaniko on Autopilot caps build scratch at ~10Gi; pin CPU-only
-  `torch` (the cluster has no GPUs). See `reference/deploy-contract.md` → *Build resource ceiling*.
+- **Heavy deps / GPU torch.** The platform's shared builders are sized for lean images;
+  pin CPU-only `torch` (the cluster has no GPUs). See `reference/deploy-contract.md` →
+  *Build resource ceiling*.
 
 ## Running locally
 

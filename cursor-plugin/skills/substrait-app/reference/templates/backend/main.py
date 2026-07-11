@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import unquote, urlparse
 
 import asyncmy
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
 _pool = None
@@ -66,6 +66,19 @@ def hello() -> dict:
 @app.get("/api/config")
 def config() -> dict:
     return {"greeting": GREETING}
+
+
+@app.get("/api/me")
+def me(request: Request) -> dict:
+    # When the app owner enables Google SSO (the portal's Access tab), the platform's
+    # auth proxy injects the signed-in user's identity into every gated request —
+    # trustworthy while SSO is on, absent otherwise (public paths, local dev), so
+    # treat a missing header as anonymous. The browser never sees these headers;
+    # this endpoint is how a frontend asks "who am I?".
+    return {
+        "email": request.headers.get("x-forwarded-email"),
+        "user": request.headers.get("x-forwarded-user"),
+    }
 
 
 class ItemIn(BaseModel):

@@ -10,11 +10,12 @@ they're materialised at deploy time. The worker:
 
 1. **VALIDATING** — extracts the zip (zip-slip safe) and validates your app against this
    contract (a backend Dockerfile is required; a frontend one too when you ship `frontend/`).
-2. **REPO_INIT** — creates a private GitHub repo and force-pushes your code as-is
-   (your Dockerfiles included; no k8s manifests added).
-3. **BUILDING → MIGRATING → DEPLOYING → SMOKE_TEST → PREVIEW_LIVE** — a build Job
-   clones the repo and builds **your** Dockerfile (kaniko); Flyway runs your migrations;
-   then the platform renders its k8s manifests (slug + image bound) and applies them.
+2. **REPO_INIT** — creates a private GitHub repo and pushes your code as-is, one
+   commit per deploy (your Dockerfiles included; no k8s manifests added).
+3. **BUILDING → MIGRATING → DEPLOYING → SMOKE_TEST → PREVIEW_LIVE** — the platform's
+   warm builder (BuildKit) builds **your** Dockerfile straight from the repo; Flyway
+   runs your migrations; then the platform renders its k8s manifests (slug + image
+   bound) and applies them.
 
 ## What goes in the zip
 
@@ -76,12 +77,10 @@ with a clear message rather than failing deep inside the image build.
 
 ## Build resource ceiling (heavy deps)
 
-The image is built by kaniko on GKE Autopilot, which caps build scratch space at
-**10Gi ephemeral storage per build** (the platform requests the max). The base image,
-your `pip install` downloads, the installed `site-packages`, and kaniko's layer
-snapshots all share that 10Gi — a build whose installed footprint exceeds it is
-**evicted** mid-build (surfaced as `kaniko-… failed (BackoffLimitExceeded): Evicted:
-… ephemeral local storage usage exceeds …`).
+Images are built on the platform's shared BuildKit builders, whose cache disk is
+sized for ordinary app images (a few GB installed footprint each). There is no hard
+per-build quota, but a single image whose layers run to tens of GB will fail with
+`no space left on device` and starves every other build's cache — keep images lean.
 
 The usual culprit is **GPU PyTorch**: `torch` (often pulled transitively by
 `sentence-transformers` / `transformers`) defaults to the CUDA build, dragging in
@@ -186,6 +185,71 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
 - Build-time frontend config (`VITE_*`) goes in a committed **`frontend/.env.production`**
   (public, non-secret values only — it's baked into the JS bundle). Leave `VITE_API_URL`
   unset (the frontend Dockerfile forces `""`). See *Build-time frontend env vars* above.
+
+### User identity under Google SSO (optional)
+
+If the app owner enables **Google single sign-on** (the portal's Access tab), every
+request that reaches your backend has already passed the platform's auth proxy, and the
+proxy **injects the signed-in user's identity as request headers**:
+
+| Header | Value |
+|---|---|
+| `X-Forwarded-Email` | the Google account email (the useful one — key user data on this) |
+| `X-Forwarded-User` | the provider's opaque user ID |
+| `X-Forwarded-Preferred-Username` | display username, when Google provides one |
+
+So an app that needs to know *who* is using it needs **no OAuth flow, no login page, no
+session handling of its own** — read the header:
+
+```python
+from fastapi import Request
+
+@app.get("/api/me")
+def me(request: Request) -> dict:
+    # Injected by the SSO proxy; absent when SSO is off or the path is public.
+    return {"email": request.headers.get("x-forwarded-email")}
+```
+
+The trust model — read this before using the headers for anything security-relevant:
+
+- **Trustworthy only while SSO is enabled.** The proxy strips any client-sent
+  `X-Forwarded-*` identity headers before injecting its own, so when SSO is on they
+  cannot be spoofed. When SSO is **off** there is no proxy and a caller can send these
+  headers themselves — so treat a missing/present header as *identity*, never as an
+  access-control decision the platform made for you. An app whose data model **requires**
+  identity should tell the owner to enable SSO, and refuse (or stay read-only) when the
+  headers are absent.
+- **Absent on public paths.** On `/health` and any owner-declared *Public paths* the
+  proxy strips the identity headers instead of injecting them (those requests are
+  unauthenticated by design).
+- **The browser never sees them.** They're request headers to your *backend* only. A
+  frontend that wants "signed in as …" should call a backend endpoint that echoes the
+  header (like `/api/me` above).
+- **Your own `Authorization` header still works.** The proxy doesn't touch the client's
+  `Authorization` header on gated routes, so Bearer-token APIs keep working behind SSO.
+- **Authorization is still yours.** SSO answers *who*; the app decides *what they may
+  do*. The owner's Access-tab allowlist controls who gets in at all; anything finer
+  (roles, per-user rows) is app logic keyed on `X-Forwarded-Email`.
+- **Local dev:** no proxy runs locally, so the headers are absent — code a graceful
+  fallback (anonymous mode, or a dev-only env var), or send the header yourself:
+  `curl -H "X-Forwarded-Email: dev@example.com" localhost:8000/api/me`.
+
+### Hosting an MCP server (or webhooks) behind Google SSO
+
+If the app owner enables **Google single sign-on** (the portal's Access tab), every
+request goes through an interactive Google sign-in — which non-browser clients (MCP
+clients, webhook senders) cannot complete. The pattern:
+
+- Mount the endpoint under a dedicated path, e.g. `POST /api/mcp` (MCP streamable-HTTP).
+- Have the owner add that path to **Public paths** on the Access tab — the SSO proxy
+  then passes it through without sign-in (the prefix covers everything below it).
+- Because the path is now public, **your app must authenticate it itself** — e.g. require
+  `Authorization: Bearer <token>` checked against a secret env var declared in
+  `backend/.env.example` (marked `# secret`). MCP clients support custom headers, so
+  users paste the token into their client config.
+
+Apps without SSO enabled need none of this — but shipping the Bearer check anyway is
+cheap insurance.
 
 ## Other backend stacks
 
