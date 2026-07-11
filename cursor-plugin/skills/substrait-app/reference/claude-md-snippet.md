@@ -1,5 +1,7 @@
-<!-- BEGIN substrait-app contract (v1) — managed by the substrait plugin (link/deploy); edits inside this block are overwritten on update. Delete the whole block to opt out. -->
+<!-- BEGIN substrait-app contract (v2) — managed by the substrait plugin (link/deploy); edits inside this block are overwritten on update. Delete the whole block to opt out. -->
 ## Substrait deployment
+
+**Linked app:** __SUBSTRAIT_APP_LINK__
 
 This project deploys to the **Substrait platform** (linked via the gitignored
 `.substrait/config.json`). Deploy with **`/substrait:deploy`** (packages source-only,

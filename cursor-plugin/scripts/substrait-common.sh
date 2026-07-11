@@ -101,18 +101,29 @@ _SUBSTRAIT_SNIPPET="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../skills/
 #             Used by link: linking is the moment a project becomes a Substrait project.
 #   refresh — only update an EXISTING outdated block; never (re-)add one. Used by
 #             deploy, so deleting the block is a durable opt-out.
-# Version detection is the BEGIN marker line itself (it carries "(vN)"): if the
-# target already contains the snippet's exact first line, it's current — no rewrite,
-# no mtime churn. Always returns 0: memo maintenance must never fail a link/deploy.
+# The snippet is a template: __SUBSTRAIT_APP_LINK__ is filled from the project config
+# (slug/host cached by link), so the block names the app it deploys to. Update
+# detection compares the RENDERED block to what's in the file — that covers both a
+# snippet version bump and a relink to a different app, with no mtime churn when
+# current. Always returns 0: memo maintenance must never fail a link/deploy.
 substrait_write_memo() {
   local mode="$1" target="${SUBSTRAIT_MEMO_FILE:-CLAUDE.md}"
   [ -f "$_SUBSTRAIT_SNIPPET" ] || return 0
   local begin='<!-- BEGIN substrait-app contract'
-  local ver_line; ver_line="$(head -1 "$_SUBSTRAIT_SNIPPET")"
+  local slug host app
+  slug="$(_json_get "$SUBSTRAIT_CONFIG_FILE" slug 2>/dev/null)" || slug=""
+  host="$(_json_get "$SUBSTRAIT_CONFIG_FILE" host 2>/dev/null)" || host=""
+  app="\`${slug:-unknown}\`${host:+ — https://$host}"
+  local rendered; rendered="$(mktemp)" || return 0
+  sed "s|__SUBSTRAIT_APP_LINK__|$app|" "$_SUBSTRAIT_SNIPPET" > "$rendered"
   if [ -f "$target" ] && grep -qF "$begin" "$target"; then
-    grep -qxF "$ver_line" "$target" && return 0
-    local tmp; tmp="$(mktemp)" || return 0
-    awk -v s="$_SUBSTRAIT_SNIPPET" '
+    local current
+    current="$(awk 'index($0, "<!-- BEGIN substrait-app contract") {inb=1}
+                    inb {print}
+                    index($0, "<!-- END substrait-app contract") {inb=0}' "$target")"
+    if [ "$current" = "$(cat "$rendered")" ]; then rm -f "$rendered"; return 0; fi
+    local tmp; tmp="$(mktemp)" || { rm -f "$rendered"; return 0; }
+    awk -v s="$rendered" '
       index($0, "<!-- BEGIN substrait-app contract") {
         inblock=1
         while ((getline line < s) > 0) print line
@@ -123,10 +134,11 @@ substrait_write_memo() {
     ' "$target" > "$tmp" && mv "$tmp" "$target" && \
       echo "Updated the Substrait section in $target."
   else
-    [ "$mode" = "refresh" ] && return 0
-    { [ -s "$target" ] && printf '\n'; cat "$_SUBSTRAIT_SNIPPET"; } >> "$target" && \
+    if [ "$mode" = "refresh" ]; then rm -f "$rendered"; return 0; fi
+    { [ -s "$target" ] && printf '\n'; cat "$rendered"; } >> "$target" && \
       echo "Recorded the Substrait deploy contract in $target (so future sessions know this is a Substrait app)."
   fi
+  rm -f "$rendered"
   return 0
 }
 
