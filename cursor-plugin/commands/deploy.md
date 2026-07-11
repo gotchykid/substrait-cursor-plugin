@@ -56,6 +56,10 @@ from there. They self-locate their shared helper, so they only need to be invoke
    the project and records it on the app as a label — the platform is stack-agnostic, so
    this only affects what's shown in the portal. If the guess is wrong, pass
    `--stack <name>` (e.g. `--watch --stack go`).
+   If the script warns that the **endpoint inventory is stale** (older than backend
+   changes), the deploy itself is unaffected — regenerate `.substrait/endpoints.json`
+   from the current backend source, then resubmit without redeploying:
+   `bash <plugin>/scripts/substrait-deploy.sh endpoints`
 
 4. **Report the outcome:** the run number and, on success, the live preview URL. If the
    script reports a failure, surface the HTTP status / message and suggest checking the

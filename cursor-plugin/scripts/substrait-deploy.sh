@@ -3,6 +3,8 @@
 #   --watch          poll the deploy until it finishes and print the preview URL
 #   --stack <name>   override the recorded backend stack (default: auto-detected from
 #                    backend/ — e.g. fastapi, python, node, go, rust, ruby, java, php, dotnet)
+#   endpoints        submit .substrait/endpoints.json only, no deploy — the remediation
+#                    for a stale-inventory warning (regenerate the file, then run this)
 # The platform is stack-agnostic (any Dockerfile that EXPOSEs 8000 + serves /health works);
 # the stack is just a label shown in the portal. The app is determined by the deploy token
 # in .substrait/config.json (run /substrait:link first). Run from the project root (the dir
@@ -17,8 +19,10 @@ die() { echo "Error: $*" >&2; exit 1; }
 
 WATCH=0
 STACK=""
+ENDPOINTS_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
+    endpoints) ENDPOINTS_ONLY=1; shift ;;
     --watch) WATCH=1; shift ;;
     --stack) shift; STACK="${1:-}"; [ -n "$STACK" ] || die "--stack needs a value (e.g. node, go, fastapi)"; shift ;;
     --stack=*) STACK="${1#*=}"; shift ;;
@@ -52,6 +56,44 @@ detect_stack() {
 
 [ -n "$(substrait_token 2>/dev/null)" ] || die "not linked — run /substrait:link first."
 [ -d backend ] || die "no backend/ here — run this from the project root (the dir with backend/, cicd/)."
+
+ENDPOINTS_FILE=".substrait/endpoints.json"
+
+# endpoints_stale — the inventory file predates at least one backend/ source change.
+# The /substrait:deploy instructions say "regenerate on every deploy", but an md step
+# is a request, not a guarantee — this is the deterministic check that catches a
+# forgotten regeneration before a stale inventory ships. mtime-based on purpose:
+# no dependency beyond find, and false positives are cheap (the fix is regenerate).
+endpoints_stale() {
+  [ -f "$ENDPOINTS_FILE" ] || return 1
+  [ -n "$(find backend -type f -newer "$ENDPOINTS_FILE" 2>/dev/null | head -1)" ]
+}
+
+# submit_endpoints — POST the inventory file. Non-2xx is reported but the caller
+# decides whether that's fatal (it isn't during a deploy; it is in `endpoints` mode).
+submit_endpoints() {
+  substrait_call POST /api/deploy/endpoints \
+    -H "Content-Type: application/json" --data-binary "@$ENDPOINTS_FILE"
+  case "${SUBSTRAIT_STATUS:-}" in
+    200|201)
+      local n; n="$(grep -o '"path"' "$ENDPOINTS_FILE" | wc -l | tr -d ' ')"
+      echo "Endpoint inventory submitted ($n endpoints)." ;;
+    404) : ;;  # backend predates the endpoints API — silently skip
+    *) echo "Warning: endpoint inventory not accepted (HTTP ${SUBSTRAIT_STATUS:-?}): ${SUBSTRAIT_BODY:-}" >&2
+       return 1 ;;
+  esac
+}
+
+# `endpoints` mode: submit the inventory and exit — no packaging, no deploy. This is
+# how the agent fixes a stale-inventory warning without re-running the whole deploy.
+if [ "$ENDPOINTS_ONLY" -eq 1 ]; then
+  [ -f "$ENDPOINTS_FILE" ] || die "no $ENDPOINTS_FILE to submit — generate it first (see /substrait:deploy)."
+  if endpoints_stale; then
+    echo "Warning: $ENDPOINTS_FILE is older than the latest backend/ changes — regenerate it from the current source before submitting." >&2
+  fi
+  submit_endpoints || exit 1
+  exit 0
+fi
 
 # Compliance preflight — fail fast & locally on the cheap, high-value parts of the deploy
 # contract before we package and upload anything. This MIRRORS the server's authoritative
@@ -163,17 +205,20 @@ echo "Deploy queued — run #$run_id."
 #    script — see the command doc for the shape). Runs AFTER the deploy fields above are
 #    parsed out of SUBSTRAIT_BODY (substrait_call overwrites the globals). Best-effort
 #    and non-fatal: the deploy is already queued, a bare terminal run has no inventory,
-#    and an older backend 404s — none of that should fail the deploy. The server
-#    replaces the whole inventory per submit.
-ENDPOINTS_FILE=".substrait/endpoints.json"
+#    and an older backend 404s — none of that should fail the deploy. A STALE file is
+#    deliberately NOT submitted — a wrong inventory is worse than last deploy's — and
+#    the warning lands in the agent's transcript with the exact remediation command.
 if [ -f "$ENDPOINTS_FILE" ]; then
-  substrait_call POST /api/deploy/endpoints \
-    -H "Content-Type: application/json" --data-binary "@$ENDPOINTS_FILE"
-  case "${SUBSTRAIT_STATUS:-}" in
-    200|201) echo "Endpoint inventory submitted ($(grep -c '"path"' "$ENDPOINTS_FILE" | tr -d ' ') endpoints)." ;;
-    404) : ;;  # backend predates the endpoints API — silently skip
-    *) echo "Warning: endpoint inventory not accepted (HTTP ${SUBSTRAIT_STATUS:-?}): ${SUBSTRAIT_BODY:-}" >&2 ;;
-  esac
+  if endpoints_stale; then
+    {
+      echo "Warning: $ENDPOINTS_FILE is older than the latest backend/ changes — NOT submitting it."
+      echo "  Regenerate it from the current backend source, then resubmit (no redeploy needed):"
+      echo "    bash \"$DIR/substrait-deploy.sh\" endpoints"
+      echo "  (Or delete the file if the backend serves an OpenAPI spec — the platform harvests that automatically.)"
+    } >&2
+  else
+    submit_endpoints || true
+  fi
 fi
 
 if [ "$WATCH" -ne 1 ]; then
