@@ -4,8 +4,8 @@ description: Package the current project (source only) and deploy it to its link
 ---
 
 You are deploying the current project to **Substrait**. This plugin bundles a deploy
-script that zips the project (source only), uploads it to the app the project's deploy
-token is bound to, and (with `--watch`) follows the build until the preview is live.
+script that zips the project (source only), uploads it to the app this project is
+linked to, and (with `--watch`) follows the build until the preview is live.
 
 The bundled scripts live in this plugin's `scripts/` directory. Resolve the plugin root
 (if `$CURSOR_PLUGIN_ROOT` is set, use it; otherwise locate the directory containing
@@ -15,8 +15,10 @@ from there. They self-locate their shared helper, so they only need to be invoke
 maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `CLAUDE.md`.
 
 1. **Check the link:** run `bash <plugin>/scripts/substrait-link.sh status`.
-   If this project isn't linked, stop and tell the user to run `/substrait:link` first
-   (deploys are authorised by the app-scoped token saved during linking).
+   If this project isn't linked, stop and tell the user to run `/substrait:link` first.
+   Deploys are authorised either by the machine's account link (personal token + this
+   project's bound app slug) or by an app-scoped deploy token saved in the project —
+   linking sets up whichever the user chose.
 
 2. **Generate the endpoint inventory** — only when the backend serves no OpenAPI spec.
    After each deploy goes live, the platform harvests the app's own spec

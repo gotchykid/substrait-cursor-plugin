@@ -6,8 +6,9 @@
 #   endpoints        submit .substrait/endpoints.json only, no deploy — the remediation
 #                    for a stale-inventory warning (regenerate the file, then run this)
 # The platform is stack-agnostic (any Dockerfile that EXPOSEs 8000 + serves /health works);
-# the stack is just a label shown in the portal. The app is determined by the deploy token
-# in .substrait/config.json (run /substrait:link first). Run from the project root (the dir
+# the stack is just a label shown in the portal. The app is determined by the project's
+# .substrait/config.json — either its app-scoped deploy token, or (with an account link)
+# its bound app slug (run /substrait:link first). Run from the project root (the dir
 # containing backend/, frontend/, cicd/).
 set -uo pipefail
 
@@ -54,7 +55,12 @@ detect_stack() {
   echo other
 }
 
-[ -n "$(substrait_token 2>/dev/null)" ] || die "not linked — run /substrait:link first."
+TOKEN="$(substrait_token 2>/dev/null)" || TOKEN=""
+[ -n "$TOKEN" ] || die "not linked — run /substrait:link first."
+# An account (sbt_) token authenticates the user; the project must also name its app.
+if [ "${TOKEN#sbt_}" != "$TOKEN" ] && ! substrait_app_slug >/dev/null 2>&1; then
+  die "this project isn't bound to an app yet — run /substrait:link to pick one."
+fi
 [ -d backend ] || die "no backend/ here — run this from the project root (the dir with backend/, cicd/)."
 
 ENDPOINTS_FILE=".substrait/endpoints.json"

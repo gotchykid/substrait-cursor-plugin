@@ -2,12 +2,19 @@
 # Shared helpers for the Substrait plugin's link/deploy scripts. Sourced, not run —
 # so it sets no shell options of its own and never exits the caller.
 #
-# A deploy token is APP-scoped, so config is PER-PROJECT: it lives in this project's
-# .substrait/config.json (gitignored), written by `substrait-link.sh`. Resolution order:
-#   portal URL : $SUBSTRAIT_PORTAL_URL  ->  .substrait/config.json "portal_url"
-#   token      : $SUBSTRAIT_TOKEN       ->  .substrait/config.json "token"
+# Two credentials, two config layers:
+#   - deploy token (sbd_…): APP-scoped, PER-PROJECT — lives in this project's
+#     .substrait/config.json (gitignored), written by `substrait-link.sh login|save`.
+#   - personal access token (sbt_…): USER-scoped, GLOBAL — lives in
+#     ~/.substrait/config.json, written by `substrait-link.sh account|save-account`.
+#     A project using a PAT stores only its app "slug" in the project config (no
+#     secret); requests then carry the slug in an X-Substrait-App header.
+# Resolution order (a project token wins over the account token):
+#   portal URL : $SUBSTRAIT_PORTAL_URL  ->  project config  ->  global config
+#   token      : $SUBSTRAIT_TOKEN       ->  project config  ->  global config
 
 SUBSTRAIT_CONFIG_FILE="${SUBSTRAIT_CONFIG_FILE:-.substrait/config.json}"
+SUBSTRAIT_GLOBAL_CONFIG="${SUBSTRAIT_GLOBAL_CONFIG:-$HOME/.substrait/config.json}"
 # The hosted Substrait API. Used unless overridden (self-hosted portal) via
 # $SUBSTRAIT_PORTAL_URL, a config portal_url, or `substrait-link.sh save --portal-url`.
 SUBSTRAIT_DEFAULT_PORTAL="https://api.substrait.build"
@@ -37,13 +44,20 @@ _json_get() { [ -f "$1" ] || return 1; _json_field "$2" < "$1"; }
 substrait_portal_url() {
   if [ -n "${SUBSTRAIT_PORTAL_URL:-}" ]; then printf '%s' "${SUBSTRAIT_PORTAL_URL%/}"; return 0; fi
   local v; if v="$(_json_get "$SUBSTRAIT_CONFIG_FILE" portal_url)"; then printf '%s' "${v%/}"; return 0; fi
+  if v="$(_json_get "$SUBSTRAIT_GLOBAL_CONFIG" portal_url)"; then printf '%s' "${v%/}"; return 0; fi
   printf '%s' "$SUBSTRAIT_DEFAULT_PORTAL"   # hosted default — no need to ask
 }
 
 substrait_token() {
   if [ -n "${SUBSTRAIT_TOKEN:-}" ]; then printf '%s' "$SUBSTRAIT_TOKEN"; return 0; fi
-  _json_get "$SUBSTRAIT_CONFIG_FILE" token
+  if _json_get "$SUBSTRAIT_CONFIG_FILE" token; then return 0; fi
+  _json_get "$SUBSTRAIT_GLOBAL_CONFIG" token
 }
+
+# substrait_app_slug — the app this project is bound to (cached by link). With a
+# personal (sbt_) token this is what NAMES the target app; with an app (sbd_) token
+# it's display-only (the server infers the app from the token).
+substrait_app_slug() { _json_get "$SUBSTRAIT_CONFIG_FILE" slug; }
 
 # substrait_call METHOD PATH [extra curl args...]
 # Performs the request and sets two globals in the CURRENT shell:
@@ -57,11 +71,22 @@ substrait_token() {
 # subshell, so the globals it sets would not reach the caller. (That was the original bug.)
 substrait_call() {
   local method="$1" path="$2"; shift 2
-  local base token tmp
+  local base token tmp slug
   base="$(substrait_portal_url)" || {
     echo "Not linked yet — run /substrait:link to set this project's portal URL and token." >&2; return 2; }
   token="$(substrait_token)" || {
-    echo "No deploy token configured — run /substrait:link." >&2; return 2; }
+    echo "No token configured — run /substrait:link." >&2; return 2; }
+  # A personal token authenticates the USER; the target app must be named explicitly.
+  # /api/deploy/* reads it from X-Substrait-App (the slug `link use` cached). Other
+  # endpoints (e.g. /api/projects) ignore the extra header, so it's always safe to send.
+  if [ "${token#sbt_}" != "$token" ]; then
+    if slug="$(substrait_app_slug)" && [ -n "$slug" ]; then
+      set -- -H "X-Substrait-App: $slug" "$@"
+    elif [ "${path#/api/deploy}" != "$path" ]; then
+      echo "This project isn't bound to an app yet — run /substrait:link to pick one." >&2
+      return 2
+    fi
+  fi
   tmp="$(mktemp)" || return 1
   SUBSTRAIT_STATUS="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" \
     -H "Authorization: Bearer $token" "$base$path" "$@" 2>/dev/null)"

@@ -1,11 +1,16 @@
 ---
 name: substrait:link
-description: Link this project to a Substrait app (browser flow — pick the app while logged in)
+description: Link this project to a Substrait app (account link — pick or create the app right here)
 ---
 
 You are linking the current working directory to one app on the **Substrait** platform so
-the user can deploy it with `/substrait:deploy`. A Substrait **deploy token** is scoped to a
-single app; the link flow obtains one for the app the user chooses.
+the user can deploy it with `/substrait:deploy`. Two credential models exist:
+
+- **Account link (preferred):** a **personal access token** (`sbt_…`) stored once per
+  machine (`~/.substrait/config.json`). It authenticates the user; each project then just
+  records **which app** it deploys to (a slug in `.substrait/config.json`, no secret).
+- **Per-app deploy token** (`sbd_…`, the original flow): scoped to a single app, stored in
+  the project. Still fully supported — and it wins over the account token if both exist.
 
 The bundled scripts live in this plugin's `scripts/` directory. Resolve the plugin root
 (if `$CURSOR_PLUGIN_ROOT` is set, use it; otherwise locate the directory containing
@@ -15,27 +20,38 @@ there. They self-locate their shared helper, so they only need to be invoked by 
 maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `CLAUDE.md`.
 
 1. **Check current state:** run `bash <plugin>/scripts/substrait-link.sh status`.
-   If it's already linked and the user only wanted to check, you're done.
+   It reports both layers: whether this machine has an account link, and what this project
+   is bound to. If the project is already linked and the user only wanted to check, you're
+   done.
 
-2. **Link via the browser (default).** Run:
-   `bash <plugin>/scripts/substrait-link.sh login`
+2. **Ensure the account link (once per machine).** If status says there's no account link:
+   `bash <plugin>/scripts/substrait-link.sh account`
    This opens the Substrait portal in the user's browser, where they (already logged in)
-   **pick the app** to link. The deploy token is minted for that app and returned to the
-   CLI automatically — no copy/paste. The command prints a URL and a short verification
+   **authorize Cursor on their account** — the personal token is minted and returned to
+   the CLI automatically, no copy/paste. The command prints a URL and a short verification
    code; relay both to the user in case the browser didn't open, and tell them to complete
-   the authorization in the browser. The command blocks until they approve, then confirms
-   the linked app + preview URL.
+   the authorization in the browser. It blocks until they approve.
    - Only on a **self-hosted** Substrait portal, pass `--portal-url <URL>`.
+   - Headless / CI fallback: the user mints a token on the portal's **Access tokens**
+     page, then `bash <plugin>/scripts/substrait-link.sh save-account --token <TOKEN>`.
+     Ask **only for the token**; never echo it back in plain text.
 
-3. **Headless / CI fallback (paste a token).** If there's no browser (CI, a remote shell),
-   the user can mint a token by hand instead:
-   - In the portal, open the app → the **Deploy** tab → **Create deploy token**, copy the
-     `sbd_…` value (shown once).
-   - Then: `bash <plugin>/scripts/substrait-link.sh save --token <TOKEN>`
-     (add `--portal-url <URL>` only for self-hosted). Ask the user **only for the token**;
-     never echo it back in plain text.
+3. **Bind this project to an app.** With the account link in place:
+   - List the user's apps: `bash <plugin>/scripts/substrait-link.sh apps`
+     (prints `slug<TAB>display name` lines). Show them to the user and ask which app this
+     project should deploy to — or whether to create a new one.
+   - Existing app: `bash <plugin>/scripts/substrait-link.sh use --app <SLUG>`
+   - New app:      `bash <plugin>/scripts/substrait-link.sh create --name "<NAME>"`
 
-4. **Confirm** the linked app + preview URL, and remind the user they can now run
+4. **Per-app token fallback.** If the user prefers a token scoped to one app (shared
+   machines, CI secrets):
+   - Browser flow: `bash <plugin>/scripts/substrait-link.sh login` (pick the app in the
+     browser; the `sbd_…` token is fetched automatically).
+   - Paste flow: mint on the app's **Deploy** tab, then
+     `bash <plugin>/scripts/substrait-link.sh save --token <TOKEN>` (add
+     `--portal-url <URL>` only for self-hosted).
+
+5. **Confirm** the linked app + preview URL, and remind the user they can now run
    `/substrait:deploy` to ship the current code.
 
 Note: on a successful link, the script also records a **"Substrait deployment" section
