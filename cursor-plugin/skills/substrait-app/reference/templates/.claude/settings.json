@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "substrait": {
+      "source": {
+        "source": "github",
+        "repo": "gotchykid/substrait-claudecode-plugin"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "substrait@substrait": true
+  }
+}

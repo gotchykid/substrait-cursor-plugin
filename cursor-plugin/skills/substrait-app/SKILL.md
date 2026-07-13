@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.07.12.163000
+version: 2026.07.13.042358
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -50,6 +50,7 @@ backend/                            # your backend, in any language (scaffold: F
   resources/db/migration/V*.sql     # OPTIONAL — Flyway migrations (MySQL/OceanBase dialect)
 frontend/                           # OPTIONAL — any framework (scaffold: React + Vite + Tailwind)
 docker-compose.yml                  # OPTIONAL — local-dev DB + Flyway runner; ignored by the platform
+.claude/settings.json               # OPTIONAL — pre-registers the Substrait plugin for Claude Code; ignored by the platform
 ```
 
 ## Runtime environment
