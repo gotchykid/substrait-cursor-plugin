@@ -1,0 +1,12 @@
+# Backing services — declare what your app needs and the platform provisions it
+# next to the app, injecting the connection env var. Installing a client library
+# alone does nothing; this manifest is the only trigger. Ephemeral by default
+# (pod restart wipes data); add `persistent: true` for a disk that survives
+# restarts and redeploys. This file is optional — delete it (or leave everything
+# commented out) if your app needs none of these.
+#
+# services:
+#   redis: {}              # cache/queue      → REDIS_URL=redis://redis:6379/0
+#   kafka:                 # Kafka-compatible → KAFKA_BROKERS=kafka:9092
+#     persistent: true     #   (single-node Redpanda; 10Gi disk when persistent)
+#   qdrant: {}             # vector database  → QDRANT_URL=http://qdrant:6333

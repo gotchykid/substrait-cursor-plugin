@@ -64,7 +64,13 @@ with that `DATABASE_URL`.
 ## Environment variables locally
 
 - `DATABASE_URL` — set it yourself as above (the platform injects it in prod).
-- `REDIS_URL`, `JWT_SECRET` — set them in your shell only if your app reads them.
+- `JWT_SECRET` — set it in your shell only if your app reads it.
+- Backing services from `substrait.yaml` (`REDIS_URL`, `KAFKA_BROKERS`, `QDRANT_URL`) —
+  run a local equivalent and export the var. The scaffold's `docker-compose.yml` ships
+  commented-out `redis`, `kafka` (Redpanda) and `qdrant` services that match what the
+  platform provisions — uncomment the ones your manifest declares, then e.g.
+  `export REDIS_URL=redis://localhost:6379/0`, `KAFKA_BROKERS=localhost:9092`,
+  `QDRANT_URL=http://localhost:6333`.
 - Custom config from `backend/.env.example` — export the ones you need, or `source` a
   local `.env` (don't commit real secrets).
 

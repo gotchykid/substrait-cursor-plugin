@@ -166,8 +166,10 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
     **MySQL** driver, never PostgreSQL (`asyncpg`/`$1`). Python (scaffold): `asyncmy` +
     `%s` placeholders. Go/other stacks: convert the `mysql://` URL to your driver's DSN —
     see *Connecting from Go & other stacks* below.
-  - `REDIS_URL`
   - `JWT_SECRET`
+  - Backing-service connection strings, present **only for services declared in
+    `substrait.yaml`** (see *Backing services* below): `REDIS_URL`, `KAFKA_BROKERS`,
+    `QDRANT_URL`.
 - Declare your app's **own** config (API keys, flags, third-party creds) in
   `backend/.env.example`: one `NAME=value` per line, a trailing `# secret` to mark a
   secret. On upload the platform pre-creates these under the app's Settings (prefilled
@@ -175,6 +177,27 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
   keys above; read your vars at runtime via `os.getenv`. Re-uploading only adds new
   keys — it never overwrites values already set in the portal.
 - All DDL in Flyway migrations — never in application code.
+- **Backing services** (optional): declare in a `substrait.yaml` at the repo root and the
+  platform provisions them in the app's namespace, injecting the connection env var.
+  Installing a client library does nothing by itself — the manifest is the only trigger.
+
+  ```yaml
+  services:
+    redis: {}              # → REDIS_URL=redis://redis:6379/0
+    kafka:                 # → KAFKA_BROKERS=kafka:9092 (single-node Redpanda, Kafka-compatible)
+      persistent: true
+    qdrant: {}             # → QDRANT_URL=http://qdrant:6333 (gRPC on qdrant:6334)
+  ```
+
+  The catalog is exactly those three; `persistent` (default `false`) is the only option —
+  anything else fails validation at upload with the fix in the message. Ephemeral services
+  lose their data on pod restart (treat redis as a cache; recreate qdrant collections if
+  missing at startup). `persistent: true` adds a disk that survives restarts and redeploys
+  (fixed sizes — redis 1Gi, kafka 10Gi, qdrant 5Gi). Removing a service from the manifest
+  — or deleting the whole file — removes it on the next deploy (the disk is kept;
+  re-declaring re-adopts it). The kafka
+  broker trades strict fsync durability for footprint — use it for events and jobs, not as
+  a system of record. Services are reachable only from inside the app's own namespace.
 - Source only in the zip: exclude `node_modules/`, `.venv/`, `dist/`,
   `__pycache__/`, build output. Max size 16 MB (default).
 - Frontend (optional) is **any framework** that builds to a site served on **port 80** —
