@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.07.17.100000
+version: 2026.07.22.100000
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -221,6 +221,17 @@ and point `DATABASE_URL` at it. See `reference/local-dev.md` for the full guide.
 
 See `reference/deploy-contract.md` for the full spec, `reference/local-dev.md` for running
 locally, and `reference/templates/` for the copy-paste-ready FastAPI + React scaffold.
+
+## The API Library (designing against existing APIs)
+
+The portal keeps a design-time **API Library**: admin-registered company APIs (with
+full OpenAPI specs and access notes) plus every deployed Substrait app's endpoint
+inventory. Browse it with `/substrait:library` (or `substrait-library.sh
+list|show|spec`) to discover what data already exists and design an app that consumes
+it. The contract is design-time only: the app calls those APIs directly, base URLs and
+credentials arrive as user-configured env vars (`backend/.env.example`, secrets marked
+`# secret`) — the platform brokers nothing at runtime. Full guide:
+`reference/api-library.md`.
 
 ## Project memory (CLAUDE.md)
 
