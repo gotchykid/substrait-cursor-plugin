@@ -9,8 +9,9 @@ is a design-time catalog with two kinds of entries:
 
 - **`internal`** — company APIs registered by platform admins, each with a full
   OpenAPI spec, a base URL and `auth_notes` describing how to get access.
-- **`app`** — deployed Substrait apps' endpoint inventories (method/path/description
-  plus the app's `https://<slug>.apps.substrait.build` base URL).
+- **`app`** — deployed Substrait apps: an endpoint inventory (method/path/description
+  plus the app's `https://<slug>.apps.substrait.build` base URL) and, for apps whose
+  deploy harvested one (`has_full_spec: true`), the full OpenAPI spec.
 
 The bundled scripts live in this plugin's `scripts/` directory. Resolve the plugin root
 (if `$CURSOR_PLUGIN_ROOT` is set, use it; otherwise locate the directory containing
@@ -18,7 +19,7 @@ The bundled scripts live in this plugin's `scripts/` directory. Resolve the plug
 scripts from there.
 
 Reads need an **account link** (personal access token). If a call fails with 401/403,
-run `/substrait:link` and complete the account authorization first.
+run `/substrait:login` and complete the account authorization first.
 
 1. **Fetch the catalog:** run `bash <plugin>/scripts/substrait-library.sh list`
    (optional filters: `--q <term>`, `--tag <tag>`). The output is JSON — parse it and
@@ -30,10 +31,16 @@ run `/substrait:link` and complete the account authorization first.
    said), then pull details for the entries that could serve it:
    - `… substrait-library.sh show internal <slug>` or `… show app <slug>` — endpoint
      summary, base URL and (for internal entries) `auth_notes`.
-   - For deep questions about an internal API (request/response shapes, parameters):
-     `… substrait-library.sh spec <slug> --out .substrait/specs/<slug>.json`
+   - For deep questions about an API (request/response shapes, parameters, fields):
+     `… substrait-library.sh spec internal|app <slug> --out .substrait/specs/<slug>.json`
      then read/grep the file — full specs can be large, so never print one to the
-     conversation wholesale.
+     conversation wholesale. This works for any entry with `has_full_spec: true` and
+     is the right way to read an app's schema — never fetch an app's public
+     `/openapi.json` yourself; SSO-gated apps answer that with a Google login
+     redirect, while the library serves the spec the platform harvested in-cluster.
+     An app entry with `has_full_spec: false` has no readable schema (it serves no
+     OpenAPI document, or hasn't redeployed since spec storage shipped) — say so and
+     reason from the endpoint summaries instead, clearly flagged as inference.
 
 3. **Design the app together.** Iterate with the user until the design is concrete:
    - which library APIs it consumes, and which specific endpoints;

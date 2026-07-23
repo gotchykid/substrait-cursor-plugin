@@ -6,7 +6,10 @@
 #   list [--q TERM] [--tag TAG]      the whole catalog (JSON, printed verbatim)
 #   show KIND SLUG                   one entry's detail (KIND = internal|app);
 #                                    includes its endpoint summary + auth notes
-#   spec SLUG [--out FILE]           an internal entry's full OpenAPI document;
+#   spec [KIND] SLUG [--out FILE]    an entry's full OpenAPI document (KIND =
+#                                    internal|app, default internal); app specs
+#                                    come from the platform's post-deploy harvest,
+#                                    so they work even when the app is SSO-gated.
 #                                    --out writes it to FILE instead of stdout
 #
 # Output is the API's JSON body untouched — the calling agent parses JSON natively,
@@ -34,7 +37,7 @@ _check_auth() {
   case "${SUBSTRAIT_STATUS:-}" in
     401|403)
       echo "The library needs an ACCOUNT link (personal access token). An app deploy" >&2
-      echo "token can't browse it — run /substrait:link and authorize your account." >&2
+      echo "token can't browse it — run /substrait:login to authorize your account." >&2
       ;;
   esac
 }
@@ -77,8 +80,12 @@ cmd_show() {
 }
 
 cmd_spec() {
+  # Optional leading kind, mirroring `show`; a bare slug keeps the historical
+  # internal-only behaviour.
+  local kind="internal"
+  case "${1:-}" in internal|app) kind="$1"; shift ;; esac
   local slug="${1:-}"; shift || true
-  [ -n "$slug" ] || die "usage: spec SLUG [--out FILE]"
+  [ -n "$slug" ] || die "usage: spec [internal|app] SLUG [--out FILE]"
   local out=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -86,7 +93,8 @@ cmd_spec() {
       *) die "unknown option: $1" ;;
     esac
   done
-  substrait_call GET "/api/library/internal/$slug/spec" || exit $?
+  local seg="internal"; [ "$kind" = "app" ] && seg="apps"
+  substrait_call GET "/api/library/$seg/$slug/spec" || exit $?
   if [ "${SUBSTRAIT_STATUS:-}" != "200" ]; then
     _check_auth
     echo "Spec for '$slug' failed (HTTP ${SUBSTRAIT_STATUS:-?}): $SUBSTRAIT_BODY" >&2

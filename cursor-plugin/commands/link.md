@@ -24,7 +24,8 @@ maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `C
    is bound to. If the project is already linked and the user only wanted to check, you're
    done.
 
-2. **Ensure the account link (once per machine).** If status says there's no account link:
+2. **Ensure the account link (once per machine).** If status says there's no account link
+   (also available standalone as `/substrait:login`):
    `bash <plugin>/scripts/substrait-link.sh account`
    This opens the Substrait portal in the user's browser, where they (already logged in)
    **authorize Cursor on their account** — the personal token is minted and returned to

@@ -7,6 +7,8 @@
 #                                           the personal token is fetched automatically
 #   save-account --token TOKEN [--portal-url URL]  fallback: paste an sbt_ token minted
 #                                           on the portal's Access tokens page
+#   whoami                                  verify the account link against the portal
+#                                           and print who it authenticates
 # Project (with an account link in place — no per-project secret):
 #   apps                                    list your apps (slug + name), to pick from
 #   use    --app SLUG                       bind this project to an existing app
@@ -225,10 +227,29 @@ cmd_save_account() {
   echo "In any project: /substrait:link picks (or creates) the app it deploys to."
 }
 
+cmd_whoami() {
+  local token portal email
+  token="$(_account_token)" || {
+    echo "No account link on this machine — run /substrait:login to authorize your account."
+    exit 1
+  }
+  portal="$(_json_get "$SUBSTRAIT_GLOBAL_CONFIG" portal_url)" || portal="$SUBSTRAIT_DEFAULT_PORTAL"
+  [ -n "${SUBSTRAIT_TOKEN:-}" ] && portal="${SUBSTRAIT_PORTAL_URL:-$portal}"
+  substrait_anon_call GET "${portal%/}/api/auth/me" -H "Authorization: Bearer $token" \
+    || die "could not reach $portal"
+  if [ "${SUBSTRAIT_STATUS:-}" != "200" ]; then
+    echo "This machine has an account token (${token:0:12}…) but $portal rejected it" \
+         "(HTTP $SUBSTRAIT_STATUS) — it may have been revoked. Run /substrait:login to re-authorize."
+    exit 1
+  fi
+  email="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field email)"
+  echo "Authenticated to $portal as ${email:-your account} (personal token ${token:0:12}…)."
+}
+
 # ── Project binding on top of an account link (slug only, no secret) ────────────
 
 cmd_apps() {
-  local token; token="$(_account_token)" || die "no account link on this machine — run /substrait:link and authorize your account first."
+  local token; token="$(_account_token)" || die "no account link on this machine — run /substrait:login to authorize your account first."
   SUBSTRAIT_TOKEN="$token" substrait_call GET /api/projects || exit $?
   [ "${SUBSTRAIT_STATUS:-}" = "200" ] || die "could not list apps (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
   # One object per line, then slug + display name per row (field order is
@@ -268,7 +289,7 @@ cmd_use() {
     esac
   done
   [ -n "$slug" ] || die "--app SLUG is required (see 'apps' for the list)"
-  local token; token="$(_account_token)" || die "no account link on this machine — run /substrait:link and authorize your account first."
+  local token; token="$(_account_token)" || die "no account link on this machine — run /substrait:login to authorize your account first."
   _bind_project "$slug" "$token"
 }
 
@@ -281,7 +302,7 @@ cmd_create() {
     esac
   done
   [ -n "$name" ] || die "--name NAME is required"
-  local token; token="$(_account_token)" || die "no account link on this machine — run /substrait:link and authorize your account first."
+  local token; token="$(_account_token)" || die "no account link on this machine — run /substrait:login to authorize your account first."
   # Escape the two JSON-special characters a display name could carry.
   local esc; esc="$(printf '%s' "$name" | sed 's/\\/\\\\/g; s/"/\\"/g')"
   SUBSTRAIT_TOKEN="$token" substrait_call POST /api/projects/create \
@@ -351,11 +372,12 @@ cmd_status() {
 case "${1:-status}" in
   account)      shift; cmd_account "$@" ;;
   save-account) shift; cmd_save_account "$@" ;;
+  whoami)       shift; cmd_whoami "$@" ;;
   apps)         shift; cmd_apps "$@" ;;
   use)          shift; cmd_use "$@" ;;
   create)       shift; cmd_create "$@" ;;
   login)  shift; cmd_login "$@" ;;
   save)   shift; cmd_save "$@" ;;
   status) shift || true; cmd_status ;;
-  *) die "unknown command: ${1}. Use account|save-account|apps|use|create|login|save|status." ;;
+  *) die "unknown command: ${1}. Use account|save-account|whoami|apps|use|create|login|save|status." ;;
 esac

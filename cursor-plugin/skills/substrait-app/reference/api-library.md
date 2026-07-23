@@ -6,26 +6,29 @@ against. It has two kinds of entries:
 - **`internal`** — company APIs registered by platform admins. Each entry carries a
   name, slug, description, tags, a base URL, `auth_notes` (how a human gets access —
   documentation, never credentials) and a full **OpenAPI spec**.
-- **`app`** — deployed Substrait apps' endpoint inventories: method/path/description
-  for every route the app serves, plus its `https://<slug>.apps.substrait.build`
-  base URL. These appear automatically once an app deploys.
+- **`app`** — deployed Substrait apps: an endpoint inventory (method/path/description
+  for every route the app serves), its `https://<slug>.apps.substrait.build` base URL,
+  and — when the post-deploy harvest captured one (`has_full_spec: true`) — the app's
+  full OpenAPI spec. These appear automatically once an app deploys.
 
 ## Browsing it
 
 The `/substrait:library` command wraps the plugin's `substrait-library.sh`:
 
 ```
-substrait-library.sh list [--q TERM] [--tag TAG]   # the whole catalog (JSON)
-substrait-library.sh show internal|app SLUG        # one entry + endpoint summary
-substrait-library.sh spec SLUG [--out FILE]        # an internal entry's full OpenAPI doc
+substrait-library.sh list [--q TERM] [--tag TAG]     # the whole catalog (JSON)
+substrait-library.sh show internal|app SLUG          # one entry + endpoint summary
+substrait-library.sh spec [internal|app] SLUG [--out FILE]  # an entry's full OpenAPI doc
 ```
 
 Under the hood these call the portal API (`GET /api/library`,
-`GET /api/library/{internal|apps}/{slug}`, `GET /api/library/internal/{slug}/spec`),
+`GET /api/library/{internal|apps}/{slug}`, `GET /api/library/{internal|apps}/{slug}/spec`),
 authenticated with the **account** personal access token (`sbt_…`) — an app-scoped
 deploy token cannot browse the library. Prefer the endpoint summaries; pull a full
 spec to a file (`--out`) only when you need request/response detail, and grep it
-rather than printing it.
+rather than printing it. For app entries, `spec app SLUG` serves the doc the platform
+harvested from the running app — use it instead of fetching the app's public
+`/openapi.json`, which is gated behind Google SSO for SSO-enabled apps.
 
 ## The design-time contract
 
