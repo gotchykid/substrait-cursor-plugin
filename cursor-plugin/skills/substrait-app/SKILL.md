@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.07.22.100000
+version: 2026.07.23.100000
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -217,7 +217,14 @@ and point `DATABASE_URL` at it. See `reference/local-dev.md` for the full guide.
 4. Put every schema change in a new `backend/resources/db/migration/V*.sql` (MySQL dialect).
 5. List any custom config the app reads from env in `backend/.env.example` (mark secrets `# secret`).
 6. Do **not** create `k8s/` — the platform generates only that, and the slug.
-7. When asked to package: zip the project root, source only, ≤ 16 MB.
+7. Record the deploy contract in the project's memory file: copy
+   `reference/claude-md-snippet.md` **verbatim** (markers and version tag included) into
+   `CLAUDE.md` (`AGENTS.md` in Cursor) — create the file, or append if it exists —
+   replacing the `__SUBSTRAIT_APP_LINK__` placeholder with
+   `not linked yet — run /substrait:link`. If the file already contains the
+   `substrait-app contract` block, leave that block untouched (the plugin's link/deploy
+   scripts own its updates).
+8. When asked to package: zip the project root, source only, ≤ 16 MB.
 
 See `reference/deploy-contract.md` for the full spec, `reference/local-dev.md` for running
 locally, and `reference/templates/` for the copy-paste-ready FastAPI + React scaffold.
@@ -235,12 +242,14 @@ credentials arrive as user-configured env vars (`backend/.env.example`, secrets 
 
 ## Project memory (CLAUDE.md)
 
-Linked projects carry a marker-delimited **"Substrait deployment" block** in their
+Substrait projects carry a marker-delimited **"Substrait deployment" block** in their
 `CLAUDE.md` (`AGENTS.md` in Cursor) with the contract essentials, so sessions that never
-load this skill still build compliant changes. The plugin's link/deploy scripts maintain
-it deterministically (the content is this skill's `reference/claude-md-snippet.md`):
-`link` adds it, `deploy` refreshes an outdated one. Don't hand-edit inside the block —
-it's replaced on update — and treat a user's deletion of the block as an opt-out.
+load this skill still build compliant changes. The content is this skill's
+`reference/claude-md-snippet.md`. Scaffolding writes it (Workflow step 7, with a
+"not linked yet" placeholder), and the plugin's link/deploy scripts then maintain it
+deterministically: `link` adds or updates it (filling in the linked app), `deploy`
+refreshes an outdated one. Don't hand-edit inside the block — it's replaced on update —
+and treat a user's deletion of the block as an opt-out.
 
 ## Updating this skill
 
