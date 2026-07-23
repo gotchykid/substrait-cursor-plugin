@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.07.23.100000
+version: 2026.07.23.110000
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -122,6 +122,9 @@ THIRD_PARTY_API_KEY=     # secret      ← mark a secret with a trailing "# secr
   (`REDIS_URL`, `KAFKA_BROKERS`, `QDRANT_URL`) — the platform injects those.
 - Read them at runtime from the environment; never commit real secret values.
 - Re-uploading only adds new keys — it never overwrites a value the user has set in the portal.
+- Real values are set either on the app's Settings page in the portal or from the linked
+  project with **`/substrait:env`** (list / set / unset — secrets write-only; live-applies
+  to a running app in seconds).
 
 ## User identity (Google SSO)
 
