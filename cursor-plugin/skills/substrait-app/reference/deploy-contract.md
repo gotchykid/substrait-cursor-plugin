@@ -177,6 +177,11 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
   keys above; read your vars at runtime via `os.getenv`. Re-uploading only adds new
   keys — it never overwrites values already set in the portal.
 - All DDL in Flyway migrations — never in application code.
+- **API description** (optional): ship an `openapi.json` at the repo root (valid JSON,
+  top-level `paths`, ≤ 1 MB) and the platform records it at deploy as the app's
+  published API description — shown on the portal's API tab and in the API Library,
+  taking precedence over the runtime harvest of the app's own `/openapi.json`. Author
+  it from the code; never list endpoints or fields the code doesn't serve.
 - **Backing services** (optional): declare in a `substrait.yaml` at the repo root and the
   platform provisions them in the app's namespace, injecting the connection env var.
   Installing a client library does nothing by itself — the manifest is the only trigger.

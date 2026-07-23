@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.07.23.175900
+version: 2026.07.23.221500
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -183,6 +183,15 @@ See `reference/deploy-contract.md` → *Build-time frontend env vars* for the fu
 These are conveniences of the **default scaffold**, not contract requirements — they don't
 apply if you pick another stack:
 
+- **Typed responses on every endpoint.** Declare a Pydantic `response_model` (or typed
+  return annotation) on every `/api` route — the scaffold's endpoints show the pattern.
+  This is what makes the app **self-describing**: FastAPI's `/openapi.json` then carries
+  real field names and types, which feed the portal's API tab and the **API Library**
+  other builders design against. A bare `return {...}` publishes "object, any fields" —
+  an API nobody can build on. (Any stack can instead ship an authored **`openapi.json`
+  at the repo root** — the platform records it at deploy as the app's published API
+  description, taking precedence over the runtime-harvested spec. `/substrait:deploy`
+  authors one automatically; connect-mode repos can commit one by hand.)
 - **Wheels-only installs.** The scaffold's `cicd/Dockerfile.backend` uses
   `pip install --only-binary=:all:` on a compiler-less `python:3.12-slim` base, so a dep with
   no wheel fails fast and legibly instead of dying in a cryptic source build. Need a source

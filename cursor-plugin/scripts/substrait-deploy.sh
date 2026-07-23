@@ -3,8 +3,9 @@
 #   --watch          poll the deploy until it finishes and print the preview URL
 #   --stack <name>   override the recorded backend stack (default: auto-detected from
 #                    backend/ — e.g. fastapi, python, node, go, rust, ruby, java, php, dotnet)
-#   endpoints        submit .substrait/endpoints.json only, no deploy — the remediation
-#                    for a stale-inventory warning (regenerate the file, then run this)
+#   endpoints        submit .substrait/endpoints.json only, no deploy — legacy
+#                    inventory-only fallback (prefer a repo-root openapi.json,
+#                    which ships in the zip and is picked up server-side)
 # The platform is stack-agnostic (any Dockerfile that EXPOSEs 8000 + serves /health works);
 # the stack is just a label shown in the portal. The app is determined by the project's
 # .substrait/config.json — either its app-scoped deploy token, or (with an account link)
@@ -64,21 +65,20 @@ fi
 [ -d backend ] || die "no backend/ here — run this from the project root (the dir with backend/, cicd/)."
 
 ENDPOINTS_FILE=".substrait/endpoints.json"
+SPEC_FILE="openapi.json"   # repo-root, ships IN the zip — picked up server-side
 
-# endpoints_stale — the inventory file predates at least one backend/ source change.
+# file_stale FILE — the artifact predates at least one backend/ source change.
 # The /substrait:deploy instructions say "regenerate on every deploy", but an md step
 # is a request, not a guarantee — this is the deterministic check that catches a
-# forgotten regeneration before a stale inventory ships. mtime-based on purpose:
+# forgotten regeneration before a stale spec/inventory ships. mtime-based on purpose:
 # no dependency beyond find, and false positives are cheap (the fix is regenerate).
-endpoints_stale() {
-  [ -f "$ENDPOINTS_FILE" ] || return 1
-  [ -n "$(find backend -type f -newer "$ENDPOINTS_FILE" 2>/dev/null | head -1)" ]
+file_stale() {
+  [ -f "$1" ] || return 1
+  [ -n "$(find backend -type f -newer "$1" 2>/dev/null | head -1)" ]
 }
 
-# submit_endpoints [RUN_ID] — POST the inventory file, stamped with the deploy run it
-# describes when one is known (the portal flags inventories whose run never went live).
-# Non-2xx is reported but the caller decides whether that's fatal (it isn't during a
-# deploy; it is in `endpoints` mode).
+# submit_endpoints [RUN_ID] — POST the legacy inventory-only file. Kept for projects
+# that still generate .substrait/endpoints.json; a repo-root openapi.json supersedes it.
 submit_endpoints() {
   local path="/api/deploy/endpoints"
   [ -n "${1:-}" ] && path="$path?run_id=$1"
@@ -94,11 +94,10 @@ submit_endpoints() {
   esac
 }
 
-# `endpoints` mode: submit the inventory and exit — no packaging, no deploy. This is
-# how the agent fixes a stale-inventory warning without re-running the whole deploy.
+# `endpoints` mode: submit the legacy inventory and exit — no packaging, no deploy.
 if [ "$ENDPOINTS_ONLY" -eq 1 ]; then
   [ -f "$ENDPOINTS_FILE" ] || die "no $ENDPOINTS_FILE to submit — generate it first (see /substrait:deploy)."
-  if endpoints_stale; then
+  if file_stale "$ENDPOINTS_FILE"; then
     echo "Warning: $ENDPOINTS_FILE is older than the latest backend/ changes — regenerate it from the current source before submitting." >&2
   fi
   submit_endpoints || exit 1
@@ -136,6 +135,14 @@ compliance_preflight() {
 echo "Checking Substrait compliance…"
 compliance_preflight
 echo "Compliance OK."
+
+# The repo-root openapi.json (the app-authored API description) ships in the zip and
+# the platform records it at deploy — it BECOMES the app's published schema, so a
+# stale one is worth flagging before it's packaged. Warn-only: mtime staleness is
+# weak evidence, and the deploy itself is unaffected.
+if file_stale "$SPEC_FILE"; then
+  echo "Warning: $SPEC_FILE is older than the latest backend/ changes — it ships with this deploy as the app's published API description. Regenerate it from the current backend source first (see /substrait:deploy) unless you know it's still accurate." >&2
+fi
 
 # Resolve the backend stack label: explicit --stack wins, else auto-detect. Lowercased to
 # match the server's accepted shape (a short lowercase slug).
@@ -210,21 +217,19 @@ host="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field preview_hostname)"
 [ -n "$host" ] || { slug="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field slug)"; host="${slug}.apps.substrait.build"; }
 echo "Deploy queued — run #$run_id."
 
-# 3. Submit the endpoint inventory, if the editor agent generated one (the
-#    /substrait:deploy command writes .substrait/endpoints.json before running this
-#    script — see the command doc for the shape). Runs AFTER the deploy fields above are
-#    parsed out of SUBSTRAIT_BODY (substrait_call overwrites the globals). Best-effort
-#    and non-fatal: the deploy is already queued, a bare terminal run has no inventory,
-#    and an older backend 404s — none of that should fail the deploy. A STALE file is
-#    deliberately NOT submitted — a wrong inventory is worse than last deploy's — and
-#    the warning lands in the agent's transcript with the exact remediation command.
-if [ -f "$ENDPOINTS_FILE" ]; then
-  if endpoints_stale; then
+# 3. Submit the legacy endpoint inventory, if one exists and no repo-root openapi.json
+#    supersedes it (the spec shipped inside the zip — the platform records it
+#    server-side at deploy, so there is nothing to submit here). Runs AFTER the deploy
+#    fields above are parsed out of SUBSTRAIT_BODY (substrait_call overwrites the
+#    globals). Best-effort and non-fatal; a STALE file is deliberately NOT submitted —
+#    a wrong inventory is worse than last deploy's.
+if [ ! -f "$SPEC_FILE" ] && [ -f "$ENDPOINTS_FILE" ]; then
+  if file_stale "$ENDPOINTS_FILE"; then
     {
       echo "Warning: $ENDPOINTS_FILE is older than the latest backend/ changes — NOT submitting it."
       echo "  Regenerate it from the current backend source, then resubmit (no redeploy needed):"
       echo "    bash \"$DIR/substrait-deploy.sh\" endpoints"
-      echo "  (Or delete the file if the backend serves an OpenAPI spec — the platform harvests that automatically.)"
+      echo "  (Better: author a full openapi.json at the repo root — see /substrait:deploy.)"
     } >&2
   else
     submit_endpoints "$run_id" || true

@@ -54,23 +54,44 @@ app = FastAPI(title="My uploaded app", lifespan=lifespan)
 GREETING = os.getenv("APP_GREETING", "Hello")
 
 
-@app.get("/health")
-def health() -> dict:
+# Every endpoint declares a response model. That's what makes the app SELF-DESCRIBING:
+# FastAPI publishes these field names/types in /openapi.json, which feeds the portal's
+# API tab and the API Library other builders design against. A bare `return {...}`
+# publishes "object, any fields" — keep responses typed.
+class Health(BaseModel):
+    status: str
+
+
+class Message(BaseModel):
+    message: str
+
+
+class Config(BaseModel):
+    greeting: str
+
+
+class Me(BaseModel):
+    email: str | None
+    user: str | None
+
+
+@app.get("/health", response_model=Health)
+def health():
     return {"status": "ok"}
 
 
-@app.get("/api/hello")
-def hello() -> dict:
+@app.get("/api/hello", response_model=Message)
+def hello():
     return {"message": f"{GREETING} from Substrait"}
 
 
-@app.get("/api/config")
-def config() -> dict:
+@app.get("/api/config", response_model=Config)
+def config():
     return {"greeting": GREETING}
 
 
-@app.get("/api/me")
-def me(request: Request) -> dict:
+@app.get("/api/me", response_model=Me)
+def me(request: Request):
     # When the app owner enables Google SSO (the portal's Access tab), the platform's
     # auth proxy injects the signed-in user's identity into every gated request —
     # trustworthy while SSO is on, absent otherwise (public paths, local dev), so
@@ -86,8 +107,24 @@ class ItemIn(BaseModel):
     name: str
 
 
-@app.get("/api/items")
-async def list_items() -> dict:
+class Item(BaseModel):
+    id: int
+    name: str
+    created_at: str
+
+
+class ItemList(BaseModel):
+    items: list[Item]
+    note: str | None = None
+
+
+class CreateResult(BaseModel):
+    ok: bool
+    note: str | None = None
+
+
+@app.get("/api/items", response_model=ItemList)
+async def list_items():
     if _pool is None:
         return {"items": [], "note": "DATABASE_URL not set"}
     # OceanBase is MySQL-wire: asyncmy + %s placeholders (never asyncpg / $1).
@@ -97,10 +134,10 @@ async def list_items() -> dict:
     return {"items": [{"id": r[0], "name": r[1], "created_at": str(r[2])} for r in rows]}
 
 
-@app.post("/api/items", status_code=201)
-async def create_item(item: ItemIn) -> dict:
+@app.post("/api/items", status_code=201, response_model=CreateResult)
+async def create_item(item: ItemIn):
     if _pool is None:
-        return {"error": "DATABASE_URL not set"}
+        return {"ok": False, "note": "DATABASE_URL not set"}
     async with _pool.acquire() as conn, conn.cursor() as cur:
         await cur.execute("INSERT INTO items (name) VALUES (%s)", (item.name,))
     return {"ok": True}

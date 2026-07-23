@@ -20,34 +20,36 @@ maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `C
    project's bound app slug) or by an app-scoped deploy token saved in the project —
    linking sets up whichever the user chose.
 
-2. **Generate the endpoint inventory** — only when the backend serves no OpenAPI spec.
-   After each deploy goes live, the platform harvests the app's own spec
-   (`/openapi.json` or `/api/openapi.json` — FastAPI serves one by default) and that
-   takes precedence, so for those backends **skip this step**. For stacks without a
-   spec (plain Go/Node/etc. routers), study the backend source (routes, routers,
-   controllers — whatever the stack uses) and write **`.substrait/endpoints.json`**
-   listing every HTTP endpoint the backend serves. The deploy script submits this file
-   to Substrait after the upload, and the portal shows it on the app's **API** tab.
-   Exact shape:
+2. **Author the app's OpenAPI spec** — write **`openapi.json` at the project root**
+   (next to `backend/` and `substrait.yaml` — commit it, it's part of the code): a
+   complete OpenAPI 3.x document you author by studying the backend source. It ships
+   inside the deploy and the platform records it as the app's published API
+   description — it takes precedence over the platform's runtime harvest, and it's
+   what other builders see in the platform's **API Library** (portal **API** tab
+   included). Your spec is usually *richer* than the runtime one — frameworks only
+   emit response schemas for typed handlers, but you can read what each handler
+   actually returns.
 
-   ```json
-   {
-     "endpoints": [
-       {"method": "GET", "path": "/api/items", "description": "List items"},
-       {"method": "POST", "path": "/api/items", "description": "Create an item"},
-       {"method": "GET", "path": "/health", "description": "Readiness probe"}
-     ]
-   }
-   ```
+   What to write:
+   - **Every route the code registers** — method + path (route params in `{param}`
+     form), including `/health`. Nothing invented, nothing padded: if it isn't in the
+     code, it isn't in the spec.
+   - **A real `summary` per operation** — one sentence saying what the endpoint does
+     (not a restatement of its path).
+   - **Request bodies and parameters** — from the handler signatures/models.
+   - **Response schemas** — trace each handler's return value (dict literals, ORM
+     rows, serializers) and write the actual field names and types under
+     `responses.200.content.application/json.schema`. Share shapes via
+     `components/schemas`. Where a field's type is genuinely unknowable from the code,
+     leave that field generic rather than guessing — accuracy beats completeness.
 
-   Rules: `method` is one of GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS, `WS` for websocket
-   routes, or `*` for catch-alls; `path` starts with `/` and keeps route parameters in
-   the framework-neutral `{param}` form (≤ 200 chars, no whitespace); `description` is
-   one short sentence (≤ 300 chars, optional); at most 300 endpoints. List concrete
-   routes the code actually registers — don't invent or pad. Regenerate the file on
-   every deploy (the server replaces the whole inventory, so removed endpoints drop
-   out). If you genuinely cannot read the backend (e.g. it's a compiled artifact),
-   skip this step — the script deploys fine without the file.
+   Keep it valid JSON with a top-level `paths` object, under 1 MB. Regenerate the file
+   whenever the backend's routes or shapes change — each deploy replaces the whole
+   spec, so removed endpoints drop out. If you genuinely cannot read the backend
+   (e.g. it's a compiled artifact), skip this step — the platform falls back to
+   harvesting the running app's own `/openapi.json` when it serves one. (Legacy: an
+   inventory-only `.substrait/endpoints.json` is still accepted when no spec file
+   exists.)
 
 3. **Deploy** from the project root:
    `bash <plugin>/scripts/substrait-deploy.sh --watch`
@@ -60,10 +62,10 @@ maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `C
    the project and records it on the app as a label — the platform is stack-agnostic, so
    this only affects what's shown in the portal. If the guess is wrong, pass
    `--stack <name>` (e.g. `--watch --stack go`).
-   If the script warns that the **endpoint inventory is stale** (older than backend
-   changes), the deploy itself is unaffected — regenerate `.substrait/endpoints.json`
-   from the current backend source, then resubmit without redeploying:
-   `bash <plugin>/scripts/substrait-deploy.sh endpoints`
+   If the script warns that the **spec is stale** (`openapi.json` older than backend
+   changes), stop and regenerate it from the current backend source before deploying —
+   the file ships with the deploy and becomes the app's published API description, so
+   a stale one publishes wrong schemas.
 
 4. **Report the outcome:** the run number and, on success, the live preview URL. If the
    script reports a failure, surface the HTTP status / message and suggest checking the
