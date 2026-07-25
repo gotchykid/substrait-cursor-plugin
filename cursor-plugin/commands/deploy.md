@@ -51,11 +51,22 @@ maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `C
    inventory-only `.substrait/endpoints.json` is still accepted when no spec file
    exists.)
 
+   **Also keep the app's description current** — `substrait.yaml` at the project root
+   is **required**, with a top-level `description:` (1–3 sentences: what the app does,
+   the data it manages, who it's for). Each deploy records it onto the app, and it's
+   what teammates see in the portal and the platform's **API Library** — so write it
+   from what the app *actually does now*, and update it when the app's purpose grows.
+   A missing file, a missing description, or leftover scaffold placeholder text fails
+   the deploy's validation (the script pre-checks this locally). Create the file with
+   just the `description:` key if the app declares no backing services — but if the
+   app already uses redis/kafka/qdrant, keep them declared under `services:`.
+
 3. **Deploy** from the project root:
    `bash <plugin>/scripts/substrait-deploy.sh --watch`
    The script runs a **compliance preflight** before packaging — it halts (without
    uploading) if the repo isn't Substrait-compliant (missing backend Dockerfile, a
-   `frontend/` with no frontend Dockerfile, or a stray `k8s/`). If it reports a
+   `frontend/` with no frontend Dockerfile, a stray `k8s/`, or a missing/placeholder
+   `substrait.yaml` description). If it reports a
    compliance failure, relay the exact message and help the user fix the repo; do not
    try to bypass it.
    The script also auto-detects the **backend stack** (fastapi/python/node/go/rust/…) from

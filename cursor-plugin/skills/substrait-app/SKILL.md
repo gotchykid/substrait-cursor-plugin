@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.07.23.221500
+version: 2026.07.25.103000
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -28,7 +28,7 @@ Everything the platform actually enforces is here, and it's all stack-neutral:
 | **Frontend Dockerfile** | Required **only when you ship a `frontend/`**: `cicd/Dockerfile.frontend` (or `frontend/Dockerfile`). Must serve the built site on **port 80**. |
 | **Database** | Always **OceanBase** (MySQL wire protocol). The platform provisions one per app and injects `DATABASE_URL`; use a **MySQL** driver for your stack. There is no other DB option. |
 | **Migrations** | All DDL in **Flyway** SQL at `backend/resources/db/migration/V*.sql` (MySQL/OceanBase dialect) — never `CREATE TABLE` from application code. |
-| **Backing services** | OPTIONAL — declare redis / kafka / qdrant in a **`substrait.yaml`** at the repo root; the platform provisions them and injects their connection env vars. See *Backing services* below. |
+| **App manifest** | REQUIRED — a **`substrait.yaml`** at the repo root with a `description:` (1–3 sentences: what the app does and who it's for — recorded onto the app at deploy; a missing manifest or description fails validation). Backing services (redis / kafka / qdrant) are declared in the same file — optional, but a used service MUST be declared. See *App manifest* below. |
 | **No k8s, no slug** | Never write `k8s/` or reference the app slug — the platform owns both. Any `k8s/` you include is discarded. |
 | **Source only, ≤ 16 MB** | Exclude `node_modules/`, `.venv/`, `dist/`, `__pycache__/` and other build artifacts. |
 
@@ -37,8 +37,9 @@ That is the whole contract. The routing model that makes it work: the app deploy
 ship no `frontend/`; see *Frontend* below). So your backend serves its API under `/api`,
 and your frontend (if any) calls it same-origin via relative `/api` paths.
 
-Project layout — the `cicd/` Dockerfile(s) are the only files the platform requires; the
-rest below is the scaffold's FastAPI/React default, which you can replace wholesale:
+Project layout — the `cicd/` Dockerfile(s) and `substrait.yaml` are the only files the
+platform requires; the rest below is the scaffold's FastAPI/React default, which you can
+replace wholesale:
 
 ```
 cicd/
@@ -50,7 +51,7 @@ backend/                            # your backend, in any language (scaffold: F
   .env.example                      # OPTIONAL — declare custom env vars + secrets (prefilled in the portal)
   resources/db/migration/V*.sql     # OPTIONAL — Flyway migrations (MySQL/OceanBase dialect)
 frontend/                           # OPTIONAL — any framework (scaffold: React + Vite + Tailwind)
-substrait.yaml                      # OPTIONAL — declare backing services (redis/kafka/qdrant)
+substrait.yaml                      # REQUIRED — app description (+ optional backing services)
 docker-compose.yml                  # OPTIONAL — local-dev DB + Flyway runner; ignored by the platform
 .claude/settings.json               # OPTIONAL — pre-registers the Substrait plugin for Claude Code; ignored by the platform
 ```
@@ -74,14 +75,21 @@ environment, never commit them:
 Whatever the stack, the database is **MySQL**, never Postgres, and all schema lives in
 Flyway migrations (below) — your code only reads and writes rows.
 
-## Backing services (`substrait.yaml`)
+## App manifest (`substrait.yaml`): description & backing services
 
-If the app needs a cache, a message queue, or a vector store, declare it in a
-**`substrait.yaml`** at the repo root — the platform provisions it next to the app and
-injects the connection env var. Installing a client library alone does nothing; **the
-manifest is the only trigger**.
+**`substrait.yaml`** at the repo root is **required** and carries two things: the app's
+**description** (what it does and who it's for — recorded onto the app at each deploy
+and shown in the portal and the API Library; a missing file, a missing description, or
+the scaffold's untouched placeholder all **fail validation**, so write a real one and
+keep it current) and any **backing services** the app needs — the platform provisions
+those next to the app and injects the connection env var. Installing a client library
+alone does nothing; **the manifest is the only trigger**.
 
 ```yaml
+description: >
+  Tracks team leave requests with an approvals workflow; managers approve or
+  reject, and the team calendar shows who's out. For people managers and HR.
+
 services:
   redis: {}                # cache/queue        → injects REDIS_URL   (redis://redis:6379/0)
   kafka:                   # Kafka-compatible   → injects KAFKA_BROKERS (kafka:9092)
@@ -95,9 +103,9 @@ services:
   cache, recreate qdrant collections on startup if missing. Set `persistent: true` for
   a disk that survives restarts and redeploys (kafka log: 10Gi, qdrant: 5Gi, redis
   AOF: 1Gi — fixed sizes).
-- Removing a service from the manifest — or deleting the whole `substrait.yaml` —
-  removes it on the next deploy (its disk is kept until the app itself is deleted;
-  re-declaring `persistent: true` re-adopts the data).
+- Removing a service from the manifest removes it on the next deploy (its disk is kept
+  until the app itself is deleted; re-declaring `persistent: true` re-adopts the data).
+  Deleting the whole `substrait.yaml` is not an option — the file is required.
 - kafka favours a small footprint over strict durability (relaxed fsync) — fine for
   events/jobs; don't treat it as a system of record.
 - Services are reachable **only from inside the app's own namespace** at `redis:6379`,

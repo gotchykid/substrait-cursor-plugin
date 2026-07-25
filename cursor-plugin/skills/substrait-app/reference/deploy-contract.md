@@ -182,11 +182,20 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
   published API description — shown on the portal's API tab and in the API Library,
   taking precedence over the runtime harvest of the app's own `/openapi.json`. Author
   it from the code; never list endpoints or fields the code doesn't serve.
-- **Backing services** (optional): declare in a `substrait.yaml` at the repo root and the
+- **App manifest (REQUIRED)**: every app ships a `substrait.yaml` at the repo root
+  with a top-level `description:` — 1–3 sentences on what the app does and who it's
+  for (≤ 2000 chars). Each deploy records it onto the app; the portal and the API
+  Library show it. A missing manifest, a missing description, or the scaffold's
+  untouched placeholder fails VALIDATING with the fix in the message.
+- **Backing services** (optional): declare in the same `substrait.yaml` and the
   platform provisions them in the app's namespace, injecting the connection env var.
-  Installing a client library does nothing by itself — the manifest is the only trigger.
+  Installing a client library does nothing by itself — the manifest is the only
+  trigger, and a service the app already uses MUST stay declared (omitting it removes
+  the service on the next deploy).
 
   ```yaml
+  description: >
+    Tracks team leave requests with an approvals workflow, for people managers.
   services:
     redis: {}              # → REDIS_URL=redis://redis:6379/0
     kafka:                 # → KAFKA_BROKERS=kafka:9092 (single-node Redpanda, Kafka-compatible)

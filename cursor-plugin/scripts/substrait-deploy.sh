@@ -128,6 +128,15 @@ compliance_preflight() {
     [ -n "$frontend_df" ] || die "not Substrait-compliant: frontend/ is present but ships no Dockerfile — add one of cicd/Dockerfile.frontend or frontend/Dockerfile (start from the scaffold's cicd/Dockerfile.frontend). It must serve the built SPA on port 80. Fix this and re-run /substrait:deploy."
   fi
 
+  # substrait.yaml is REQUIRED, with a real description — mirrors the server's
+  # VALIDATING check so the failure is local and instant instead of a failed run.
+  [ -f substrait.yaml ] || die "not Substrait-compliant: no substrait.yaml at the project root — every app ships one with a \`description:\` (what the app does and who it's for; shown in the portal and the API Library) plus any backing services. If the app already uses redis/kafka/qdrant, declare them under \`services:\` — omitting a service removes it. Add the file and re-run /substrait:deploy."
+  grep -Eq '^[[:space:]]*description[[:space:]]*:' substrait.yaml \
+    || die "not Substrait-compliant: substrait.yaml has no \`description:\` — add one to three sentences on what the app does and who it's for, then re-run /substrait:deploy."
+  if grep -q 'Describe your app here' substrait.yaml; then
+    die "not Substrait-compliant: substrait.yaml still carries the scaffold placeholder description — replace it with what this app actually does, then re-run /substrait:deploy."
+  fi
+
   [ -d k8s ] || return 0
   die "not Substrait-compliant: a k8s/ directory is present — the platform owns the Kubernetes manifests and discards anything you ship there. Remove k8s/ and re-run /substrait:deploy."
 }
