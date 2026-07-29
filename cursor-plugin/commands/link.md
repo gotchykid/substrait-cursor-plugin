@@ -19,6 +19,14 @@ there. They self-locate their shared helper, so they only need to be invoked by 
 **Always prefix script invocations with `SUBSTRAIT_MEMO_FILE=AGENTS.md`** — the scripts
 maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `CLAUDE.md`.
 
+**If any authentication has to be established below (account link or per-app token), the
+Substrait portal/API URL is REQUIRED — there is no default.** If the user supplied a URL
+as the command argument (`$ARGUMENTS`), use it; otherwise **ask the user for their
+Substrait portal/API URL** (e.g. `https://api.substrait.build` hosted, or a tenant/demo
+URL like `https://api.demo.substrait.build` — the portal's connect page shows it) and pass
+it as `--portal-url <URL>`. It's only needed when first writing auth to config; if the
+machine/project is already linked, skip straight to binding.
+
 1. **Check current state:** run `bash <plugin>/scripts/substrait-link.sh status`.
    It reports both layers: whether this machine has an account link, and what this project
    is bound to. If the project is already linked and the user only wanted to check, you're
@@ -26,16 +34,16 @@ maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `C
 
 2. **Ensure the account link (once per machine).** If status says there's no account link
    (also available standalone as `/substrait:login`):
-   `bash <plugin>/scripts/substrait-link.sh account`
+   `bash <plugin>/scripts/substrait-link.sh account --portal-url <URL>`
    This opens the Substrait portal in the user's browser, where they (already logged in)
    **authorize Cursor on their account** — the personal token is minted and returned to
    the CLI automatically, no copy/paste. The command prints a URL and a short verification
    code; relay both to the user in case the browser didn't open, and tell them to complete
    the authorization in the browser. It blocks until they approve.
-   - Only on a **self-hosted** Substrait portal, pass `--portal-url <URL>`.
+   - `--portal-url` is **required** (the URL from the preamble); the command errors without it.
    - Headless / CI fallback: the user mints a token on the portal's **Access tokens**
-     page, then `bash <plugin>/scripts/substrait-link.sh save-account --token <TOKEN>`.
-     Ask **only for the token**; never echo it back in plain text.
+     page, then `bash <plugin>/scripts/substrait-link.sh save-account --token <TOKEN> --portal-url <URL>`
+     (`--portal-url` required). Ask **only for the token**; never echo it back in plain text.
 
 3. **Bind this project to an app.** With the account link in place:
    - List the user's apps: `bash <plugin>/scripts/substrait-link.sh apps`
@@ -46,11 +54,12 @@ maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `C
 
 4. **Per-app token fallback.** If the user prefers a token scoped to one app (shared
    machines, CI secrets):
-   - Browser flow: `bash <plugin>/scripts/substrait-link.sh login` (pick the app in the
-     browser; the `sbd_…` token is fetched automatically).
+   - Browser flow: `bash <plugin>/scripts/substrait-link.sh login --portal-url <URL>` (pick
+     the app in the browser; the `sbd_…` token is fetched automatically). `--portal-url`
+     is **required**.
    - Paste flow: mint on the app's **Deploy** tab, then
-     `bash <plugin>/scripts/substrait-link.sh save --token <TOKEN>` (add
-     `--portal-url <URL>` only for self-hosted).
+     `bash <plugin>/scripts/substrait-link.sh save --token <TOKEN> --portal-url <URL>`
+     (`--portal-url` required).
 
 5. **Confirm** the linked app + preview URL, and remind the user they can now run
    `/substrait:deploy` to ship the current code.

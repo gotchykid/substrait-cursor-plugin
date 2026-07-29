@@ -288,6 +288,34 @@ clients, webhook senders) cannot complete. The pattern:
 Apps without SSO enabled need none of this — but shipping the Bearer check anyway is
 cheap insurance.
 
+## Migration DDL: OceanBase gotchas
+
+Migrations run against **OceanBase in MySQL mode**, which rejects a few DDL shapes that
+real MySQL accepts. These fail only at deploy time (a local MySQL/MariaDB happily applies
+them), and the failure is expensive: a failed migration leaves a `success=0` row in the
+app's Flyway history, and because the platform runs plain `migrate` (no `repair`), **every
+later deploy fails validation** (`Detected failed migration to version N`) until a
+platform operator clears the row — fixing your SQL and re-uploading is not enough on its
+own. So write DDL defensively:
+
+- **Never add a column and its foreign key in one `ALTER TABLE`.**
+  `ALTER TABLE t ADD COLUMN c …, ADD CONSTRAINT … FOREIGN KEY (c) …` fails with error
+  5031 `Column not found` — the FK clause can't see the column being added in the same
+  statement. Split it into two `ALTER TABLE` statements: add the column first, then the
+  constraint.
+- **Never use a self-referencing foreign key with `ON DELETE CASCADE`** (a column
+  referencing its own table, e.g. `parent_id` → same table's `id`). OceanBase rejects
+  it outright. Use a plain indexed column instead and do the cascade delete in
+  application code.
+- **One logical change per statement.** Combined multi-clause `ALTER`s are where OB's
+  MySQL-compat gaps surface; small statements also fail atomically, which keeps a
+  failed migration recoverable.
+
+If a deploy does fail at MIGRATING with `Detected failed migration to version N`: fix the
+migration file **in place** (it never succeeded anywhere, so editing it is safe), then ask
+the platform team to clear the failed history row — the next deploy re-runs the corrected
+version.
+
 ## Other backend stacks
 
 The contract is behavioural and stack-agnostic, so a Go (or Node, Rust, Ruby, …) backend is
@@ -363,6 +391,7 @@ exactly as the FastAPI scaffold does. Everything else in this contract — one i
 - [ ] Build-time `VITE_*` vars (if any) are in a committed `frontend/.env.production` — public values only, no secrets, and `VITE_API_URL` is left unset. If `.gitignore` ignores `.env*`, it un-ignores `.env.production`.
 - [ ] No `k8s/` (the platform owns it).
 - [ ] Schema changes only in `backend/resources/db/migration/V*.sql`.
+- [ ] Migration DDL avoids the OceanBase gotchas (no column + FK in one `ALTER`; no self-referencing FK with `ON DELETE CASCADE`) — see *Migration DDL: OceanBase gotchas*.
 - [ ] Custom env vars/secrets declared in `backend/.env.example` (secrets marked `# secret`); no real secret values committed.
 - [ ] Secrets read from env, none committed.
 - [ ] Zip is source-only and under 16 MB.

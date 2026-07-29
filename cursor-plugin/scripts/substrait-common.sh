@@ -15,9 +15,10 @@
 
 SUBSTRAIT_CONFIG_FILE="${SUBSTRAIT_CONFIG_FILE:-.substrait/config.json}"
 SUBSTRAIT_GLOBAL_CONFIG="${SUBSTRAIT_GLOBAL_CONFIG:-$HOME/.substrait/config.json}"
-# The hosted Substrait API. Used unless overridden (self-hosted portal) via
-# $SUBSTRAIT_PORTAL_URL, a config portal_url, or `substrait-link.sh save --portal-url`.
-SUBSTRAIT_DEFAULT_PORTAL="https://api.substrait.build"
+# There is NO default portal — the URL is always explicit (multi-tenant: a wrong default
+# would silently target the wrong installation). It's supplied once at login/link time via
+# --portal-url or $SUBSTRAIT_PORTAL_URL and then stored as portal_url in the config; every
+# later command reads it from there.
 
 # _json_field KEY — read a JSON object from stdin, print obj[KEY]. Exit 1 if absent.
 # Used to pull fields out of API response bodies (the device-link start/poll payloads)
@@ -41,11 +42,14 @@ _json_field() {
 # _json_get FILE KEY -> prints the value, or exits 1 if the file or key is absent.
 _json_get() { [ -f "$1" ] || return 1; _json_field "$2" < "$1"; }
 
+# Resolve the portal URL from (in order) the env override, the project config, the global
+# config. Returns 1 (no output) when none is set — there is no default; the caller must
+# surface a "run /substrait:login --portal-url <URL>" message.
 substrait_portal_url() {
   if [ -n "${SUBSTRAIT_PORTAL_URL:-}" ]; then printf '%s' "${SUBSTRAIT_PORTAL_URL%/}"; return 0; fi
   local v; if v="$(_json_get "$SUBSTRAIT_CONFIG_FILE" portal_url)"; then printf '%s' "${v%/}"; return 0; fi
   if v="$(_json_get "$SUBSTRAIT_GLOBAL_CONFIG" portal_url)"; then printf '%s' "${v%/}"; return 0; fi
-  printf '%s' "$SUBSTRAIT_DEFAULT_PORTAL"   # hosted default — no need to ask
+  return 1
 }
 
 substrait_token() {
@@ -73,7 +77,7 @@ substrait_call() {
   local method="$1" path="$2"; shift 2
   local base token tmp slug
   base="$(substrait_portal_url)" || {
-    echo "Not linked yet — run /substrait:link to set this project's portal URL and token." >&2; return 2; }
+    echo "No portal URL configured — run /substrait:login --portal-url <your Substrait API URL> (there is no default)." >&2; return 2; }
   token="$(substrait_token)" || {
     echo "No token configured — run /substrait:link." >&2; return 2; }
   # A personal token authenticates the USER; the target app must be named explicitly.

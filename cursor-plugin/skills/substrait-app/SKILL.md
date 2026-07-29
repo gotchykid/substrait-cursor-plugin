@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.07.25.103000
+version: 2026.07.29.180000
 description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -27,7 +27,7 @@ Everything the platform actually enforces is here, and it's all stack-neutral:
 | **Backend Dockerfile** | `cicd/Dockerfile.backend` (or `cicd/Dockerfile`, or `backend/Dockerfile`). Must `EXPOSE 8000`, serve **`GET /health`** (returns 200 — the readiness probe), and serve the API under **`/api`**. |
 | **Frontend Dockerfile** | Required **only when you ship a `frontend/`**: `cicd/Dockerfile.frontend` (or `frontend/Dockerfile`). Must serve the built site on **port 80**. |
 | **Database** | Always **OceanBase** (MySQL wire protocol). The platform provisions one per app and injects `DATABASE_URL`; use a **MySQL** driver for your stack. There is no other DB option. |
-| **Migrations** | All DDL in **Flyway** SQL at `backend/resources/db/migration/V*.sql` (MySQL/OceanBase dialect) — never `CREATE TABLE` from application code. |
+| **Migrations** | All DDL in **Flyway** SQL at `backend/resources/db/migration/V*.sql` (MySQL/OceanBase dialect) — never `CREATE TABLE` from application code. OceanBase rejects some valid-MySQL DDL (a failed migration blocks all later deploys until a platform operator repairs it) — see *Migration DDL: OceanBase gotchas* in `reference/deploy-contract.md`. |
 | **App manifest** | REQUIRED — a **`substrait.yaml`** at the repo root with a `description:` (1–3 sentences: what the app does and who it's for — recorded onto the app at deploy; a missing manifest or description fails validation). Backing services (redis / kafka / qdrant) are declared in the same file — optional, but a used service MUST be declared. See *App manifest* below. |
 | **No k8s, no slug** | Never write `k8s/` or reference the app slug — the platform owns both. Any `k8s/` you include is discarded. |
 | **Source only, ≤ 16 MB** | Exclude `node_modules/`, `.venv/`, `dist/`, `__pycache__/` and other build artifacts. |
@@ -234,7 +234,8 @@ and point `DATABASE_URL` at it. See `reference/local-dev.md` for the full guide.
    API under **`/api`**. Ship a `cicd/Dockerfile.backend` that builds it and `EXPOSE`s 8000.
 3. (Optional) Build a frontend in `frontend/` calling the API via relative `/api` paths, and
    ship a `cicd/Dockerfile.frontend` that serves it on **port 80**.
-4. Put every schema change in a new `backend/resources/db/migration/V*.sql` (MySQL dialect).
+4. Put every schema change in a new `backend/resources/db/migration/V*.sql` (MySQL dialect,
+   minding the OceanBase DDL gotchas in `reference/deploy-contract.md`).
 5. List any custom config the app reads from env in `backend/.env.example` (mark secrets `# secret`).
 6. Do **not** create `k8s/` — the platform generates only that, and the slug.
 7. Record the deploy contract in the project's memory file: copy

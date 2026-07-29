@@ -32,6 +32,13 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 die() { echo "Error: $*" >&2; exit 1; }
 
+# Shown when a config-establishing flow (login/account/save/save-account) runs without an
+# explicit portal URL. There is NO default — the URL must be given via --portal-url or
+# $SUBSTRAIT_PORTAL_URL (multi-tenant safety: a default would silently target the wrong
+# installation). Kept as a constant so the four flows share one wording. Callers use it
+# INLINE (not in a $() subshell) so die() actually exits the script.
+_PORTAL_REQUIRED_MSG="a portal URL is required — pass --portal-url <your Substrait API URL> (e.g. https://api.substrait.build for the hosted platform, or your tenant/demo URL such as https://api.demo.substrait.build). There is no default."
+
 # _write_config PORTAL TOKEN [SLUG] [HOST] — write .substrait/config.json (0600) and
 # make sure .substrait/ is gitignored. SLUG/HOST are cached for friendlier messages.
 _write_config() {
@@ -105,7 +112,7 @@ cmd_login() {
       *) die "unknown arg: $1" ;;
     esac
   done
-  portal="${portal:-${SUBSTRAIT_PORTAL_URL:-$SUBSTRAIT_DEFAULT_PORTAL}}"; portal="${portal%/}"
+  portal="${portal:-${SUBSTRAIT_PORTAL_URL:-}}"; [ -n "$portal" ] || die "$_PORTAL_REQUIRED_MSG"; portal="${portal%/}"
 
   # 1. Start the device-link flow — get the device_code (our secret) + a user_code/URL.
   substrait_anon_call POST "$portal/api/link/start" || die "could not reach $portal"
@@ -159,7 +166,7 @@ cmd_account() {
       *) die "unknown arg: $1" ;;
     esac
   done
-  portal="${portal:-${SUBSTRAIT_PORTAL_URL:-$SUBSTRAIT_DEFAULT_PORTAL}}"; portal="${portal%/}"
+  portal="${portal:-${SUBSTRAIT_PORTAL_URL:-}}"; [ -n "$portal" ] || die "$_PORTAL_REQUIRED_MSG"; portal="${portal%/}"
 
   # 1. Start an ACCOUNT-scope device link — the browser will authorize the CLI as the
   #    user (no app picking) and mint a personal access token.
@@ -215,7 +222,7 @@ cmd_save_account() {
   done
   [ -n "$token" ] || die "--token is required (create one on the portal's Access tokens page, or use 'account')"
   [ "${token#sbt_}" != "$token" ] || die "that is not a personal token (sbt_…) — app tokens (sbd_…) go through 'save'"
-  portal="${portal:-$SUBSTRAIT_DEFAULT_PORTAL}"
+  portal="${portal:-${SUBSTRAIT_PORTAL_URL:-}}"; [ -n "$portal" ] || die "$_PORTAL_REQUIRED_MSG"; portal="${portal%/}"
 
   # Verify the token before persisting it.
   substrait_anon_call GET "$portal/api/auth/me" -H "Authorization: Bearer $token" \
@@ -233,8 +240,12 @@ cmd_whoami() {
     echo "No account link on this machine — run /substrait:login to authorize your account."
     exit 1
   }
-  portal="$(_json_get "$SUBSTRAIT_GLOBAL_CONFIG" portal_url)" || portal="$SUBSTRAIT_DEFAULT_PORTAL"
-  [ -n "${SUBSTRAIT_TOKEN:-}" ] && portal="${SUBSTRAIT_PORTAL_URL:-$portal}"
+  if [ -n "${SUBSTRAIT_PORTAL_URL:-}" ]; then
+    portal="${SUBSTRAIT_PORTAL_URL%/}"
+  else
+    portal="$(_json_get "$SUBSTRAIT_GLOBAL_CONFIG" portal_url)" \
+      || die "the account link is missing its portal URL — re-run /substrait:login --portal-url <your Substrait API URL>."
+  fi
   substrait_anon_call GET "${portal%/}/api/auth/me" -H "Authorization: Bearer $token" \
     || die "could not reach $portal"
   if [ "${SUBSTRAIT_STATUS:-}" != "200" ]; then
@@ -323,7 +334,7 @@ cmd_save() {
     esac
   done
   [ -n "$token" ]  || die "--token is required (create one on the app's Deploy tab, or use 'login')"
-  portal="${portal:-$SUBSTRAIT_DEFAULT_PORTAL}"
+  portal="${portal:-${SUBSTRAIT_PORTAL_URL:-}}"; [ -n "$portal" ] || die "$_PORTAL_REQUIRED_MSG"; portal="${portal%/}"
 
   _write_config "$portal" "$token"
   # Verify the token + discover the app it's bound to, then cache slug/host.
