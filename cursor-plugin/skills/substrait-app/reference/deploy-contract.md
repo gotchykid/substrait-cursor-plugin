@@ -291,12 +291,15 @@ cheap insurance.
 ## Migration DDL: OceanBase gotchas
 
 Migrations run against **OceanBase in MySQL mode**, which rejects a few DDL shapes that
-real MySQL accepts. These fail only at deploy time (a local MySQL/MariaDB happily applies
-them), and the failure is expensive: a failed migration leaves a `success=0` row in the
-app's Flyway history, and because the platform runs plain `migrate` (no `repair`), **every
-later deploy fails validation** (`Detected failed migration to version N`) until a
-platform operator clears the row — fixing your SQL and re-uploading is not enough on its
-own. So write DDL defensively:
+real MySQL accepts. A local MySQL/MariaDB happily applies them, so they surface only at
+deploy time — and the failure is expensive: a failed migration leaves a `success=0` row in
+the app's Flyway history, and because the platform runs plain `migrate` (no `repair`),
+**every later deploy fails validation** (`Detected failed migration to version N`) until
+that row is cleared. Fixing your SQL and redeploying is not enough on its own.
+
+The two shapes below are now **rejected at VALIDATING**, before anything runs, so you get
+a clear error instead of a wedged app. Don't rely on that as your only guard — write DDL
+defensively anyway:
 
 - **Never add a column and its foreign key in one `ALTER TABLE`.**
   `ALTER TABLE t ADD COLUMN c …, ADD CONSTRAINT … FOREIGN KEY (c) …` fails with error
@@ -311,10 +314,23 @@ own. So write DDL defensively:
   MySQL-compat gaps surface; small statements also fail atomically, which keeps a
   failed migration recoverable.
 
-If a deploy does fail at MIGRATING with `Detected failed migration to version N`: fix the
-migration file **in place** (it never succeeded anywhere, so editing it is safe), then ask
-the platform team to clear the failed history row — the next deploy re-runs the corrected
-version.
+### Recovering from a failed migration
+
+If a deploy fails at MIGRATING with `Detected failed migration to version N`, the app is
+stuck until you clear it — but you can do that yourself:
+
+1. **Portal → your app → Database tab.** A banner names the failed migration and lists any
+   tables it had already created before it died. Click **Repair migration history**
+   (owner or admin). That runs `flyway repair`, which clears the failed row.
+2. **Fix the migration file in place.** It never succeeded anywhere, so editing it is
+   safe — no new version number, no checksum problem.
+3. **Deal with what it left behind.** DDL auto-commits, so any table/column the migration
+   created before failing is still there, and the corrected migration re-runs *from the
+   start* — it will hit `table already exists` unless you either drop those objects or
+   make the migration re-runnable (`CREATE TABLE IF NOT EXISTS`, and check before
+   `ALTER`). The banner lists them with row counts so you know what's safe to drop.
+4. **Then deploy.** Repair before you push the fix: pushing an unfixed migration just
+   half-applies it again and re-blocks deploys.
 
 ## Other backend stacks
 

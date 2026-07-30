@@ -1,11 +1,14 @@
 ---
 name: substrait:deploy
-description: Package the current project (source only) and deploy it to its linked Substrait app
+description: Deploy the current project to its linked Substrait app (zip upload, or a pushed-branch trigger for GitHub-connected apps)
 ---
 
 You are deploying the current project to **Substrait**. This plugin bundles a deploy
-script that zips the project (source only), uploads it to the app this project is
-linked to, and (with `--watch`) follows the build until the preview is live.
+script that picks the path from the linked app's mode: a **GitHub-connected app** is
+deployed by *trigger* — Substrait pulls the pushed branch, so nothing is uploaded and
+everything (including `openapi.json` and `substrait.yaml`) must be **committed and
+pushed** first — while any other app is zipped (source only) and uploaded. Either way,
+`--watch` follows the build until the preview is live.
 
 The bundled scripts live in this plugin's `scripts/` directory. Resolve the plugin root
 (if `$CURSOR_PLUGIN_ROOT` is set, use it; otherwise locate the directory containing
@@ -61,27 +64,40 @@ maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `C
    just the `description:` key if the app declares no backing services — but if the
    app already uses redis/kafka/qdrant, keep them declared under `services:`.
 
-3. **Deploy** from the project root:
+3. **Commit and push first if the app is GitHub-connected.** For a connected app the
+   deploy builds the **pushed branch**, not your working tree — so after writing or
+   regenerating `openapi.json` / `substrait.yaml`, commit everything and push to the
+   connected branch before deploying. The script refuses to trigger from a dirty tree,
+   the wrong branch, or an unpushed HEAD, and the server independently verifies the
+   commit SHA — if it reports a mismatch, push (or pull a teammate's newer commits) and
+   re-run. Do not try to work around these gates; they exist so the platform never
+   builds code you didn't validate. (Zip-deployed apps skip this step — the zip carries
+   the working tree directly.)
+
+4. **Deploy** from the project root:
    `bash <plugin>/scripts/substrait-deploy.sh --watch`
-   The script runs a **compliance preflight** before packaging — it halts (without
-   uploading) if the repo isn't Substrait-compliant (missing backend Dockerfile, a
+   The script runs a **compliance preflight** before deploying anything — it halts if
+   the repo isn't Substrait-compliant (missing backend Dockerfile, a
    `frontend/` with no frontend Dockerfile, a stray `k8s/`, or a missing/placeholder
    `substrait.yaml` description). If it reports a
    compliance failure, relay the exact message and help the user fix the repo; do not
    try to bypass it.
-   The script also auto-detects the **backend stack** (fastapi/python/node/go/rust/…) from
+   For zip deploys the script also auto-detects the **backend stack**
+   (fastapi/python/node/go/rust/…) from
    the project and records it on the app as a label — the platform is stack-agnostic, so
    this only affects what's shown in the portal. If the guess is wrong, pass
-   `--stack <name>` (e.g. `--watch --stack go`).
+   `--stack <name>` (e.g. `--watch --stack go`). Connected apps ignore `--stack` — the
+   platform detects the stack from the repo itself.
    If the script warns that the **spec is stale** (`openapi.json` older than backend
    changes), stop and regenerate it from the current backend source before deploying —
    the file ships with the deploy and becomes the app's published API description, so
    a stale one publishes wrong schemas.
 
-4. **Report the outcome:** the run number and, on success, the live preview URL. If the
+5. **Report the outcome:** the run number and, on success, the live preview URL. If the
    script reports a failure, surface the HTTP status / message and suggest checking the
    portal logs for that run — do not retry automatically.
 
-Note: the script enforces the 16 MB source-only limit and excludes `node_modules/`,
-`.venv/`, `dist/`, build output and `.git/`. If it reports the zip is too large, help the
-user find and exclude the offending large files rather than bypassing the check.
+Note: for zip deploys the script enforces the 16 MB source-only limit and excludes
+`node_modules/`, `.venv/`, `dist/`, build output and `.git/`. If it reports the zip is
+too large, help the user find and exclude the offending large files rather than
+bypassing the check.

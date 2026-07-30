@@ -1,7 +1,7 @@
 ---
 name: substrait-app
-version: 2026.07.29.180000
-description: Build apps that deploy on the Substrait platform via upload mode. Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
+version: 2026.07.30.120000
+description: Build apps that deploy on the Substrait platform via upload mode (GitHub-connected apps deploy from their pushed branch with the same commands — no zip). Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
 # Substrait upload-mode apps
@@ -246,6 +246,14 @@ and point `DATABASE_URL` at it. See `reference/local-dev.md` for the full guide.
    `substrait-app contract` block, leave that block untouched (the plugin's link/deploy
    scripts own its updates).
 8. When asked to package: zip the project root, source only, ≤ 16 MB.
+
+> **GitHub-connected apps** (created in the portal via *Connect to GitHub*) never ship
+> a zip: `/substrait:deploy` *triggers* Substrait to pull the app's connected branch.
+> Everything above still applies, but the artifacts (`openapi.json`, `substrait.yaml`,
+> migrations, Dockerfiles) must be **committed and pushed** before deploying — the
+> deploy script refuses a dirty tree, the wrong branch, or an unpushed HEAD, and the
+> server verifies the pushed commit SHA. Pushing alone does **not** deploy unless the
+> app's auto-deploy toggle is enabled in the portal.
 
 See `reference/deploy-contract.md` for the full spec, `reference/local-dev.md` for running
 locally, and `reference/templates/` for the copy-paste-ready FastAPI + React scaffold.

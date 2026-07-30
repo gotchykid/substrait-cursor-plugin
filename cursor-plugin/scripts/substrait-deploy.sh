@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Package the current project (source only) and deploy it to its linked Substrait app.
+# Deploy the current project to its linked Substrait app. Two paths, picked by the
+# app's mode (GET /api/deploy/app): a CONNECTED (GitHub) app is deployed by TRIGGER —
+# the server pulls the pushed branch, so the tree must be committed + pushed (gated
+# locally, verified server-side by SHA) — while every other app is packaged (source
+# only) and uploaded as a zip.
 #   --watch          poll the deploy until it finishes and print the preview URL
 #   --stack <name>   override the recorded backend stack (default: auto-detected from
-#                    backend/ — e.g. fastapi, python, node, go, rust, ruby, java, php, dotnet)
+#                    backend/ — e.g. fastapi, python, node, go, rust, ruby, java, php,
+#                    dotnet). Ignored for connected apps (the platform detects it).
 #   endpoints        submit .substrait/endpoints.json only, no deploy — legacy
 #                    inventory-only fallback (prefer a repo-root openapi.json,
 #                    which ships in the zip and is picked up server-side)
@@ -145,13 +150,65 @@ echo "Checking Substrait compliance…"
 compliance_preflight
 echo "Compliance OK."
 
-# The repo-root openapi.json (the app-authored API description) ships in the zip and
-# the platform records it at deploy — it BECOMES the app's published schema, so a
-# stale one is worth flagging before it's packaged. Warn-only: mtime staleness is
-# weak evidence, and the deploy itself is unaffected.
+# The repo-root openapi.json (the app-authored API description) ships with the code
+# and the platform records it at deploy — it BECOMES the app's published schema. A
+# missing one mirrors the server's OPENAPI_SPEC_ENFORCEMENT policy (currently an
+# advisory, planned to become a hard requirement); a stale one is worth flagging
+# before it ships. Both warn-only here: the server owns the actual policy.
+if [ ! -f "$SPEC_FILE" ]; then
+  echo "Warning: no $SPEC_FILE at the project root — author the app's OpenAPI spec from the backend source (see /substrait:deploy). The platform currently records this as an advisory on the run; it is slated to become a hard requirement." >&2
+fi
 if file_stale "$SPEC_FILE"; then
   echo "Warning: $SPEC_FILE is older than the latest backend/ changes — it ships with this deploy as the app's published API description. Regenerate it from the current backend source first (see /substrait:deploy) unless you know it's still accurate." >&2
 fi
+
+# Which path does this app deploy by? A CONNECTED (GitHub) app deploys from its own
+# repo — the server pulls the pushed branch, nothing is uploaded; everything else ships
+# as a zip. An older backend reports no mode → zip path, where a connected app still
+# gets the server's 409 guidance (same as before this branch existed).
+MODE=""; CONN_REPO=""; CONN_BRANCH=""
+if substrait_call GET /api/deploy/app && [ "${SUBSTRAIT_STATUS:-}" = "200" ]; then
+  MODE="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field mode)" || MODE=""
+  CONN_REPO="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field connected_repo)" || CONN_REPO=""
+  CONN_BRANCH="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field connected_branch)" || CONN_BRANCH=""
+fi
+
+if [ "$MODE" = "connect" ]; then
+  # ── Connected app: trigger a pull of the pushed branch. ──────────────────────
+  # The gates below exist so the tree the server builds is EXACTLY the tree the
+  # preflight above validated: everything committed AND pushed. The server
+  # re-verifies the SHA authoritatively (409 on mismatch), so these are for fast,
+  # actionable local errors — not the enforcement itself.
+  [ -n "$STACK" ] && echo "Note: --stack is ignored for connected apps — the platform detects the stack from the repo." >&2
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    || die "this app deploys from GitHub ($CONN_REPO@$CONN_BRANCH) but this directory isn't a git checkout — clone that repo and run /substrait:deploy from it."
+  [ -z "$(git status --porcelain 2>/dev/null)" ] \
+    || die "uncommitted changes — Substrait builds the PUSHED branch, so anything uncommitted (openapi.json and substrait.yaml included) won't ship. Commit and push, then re-run /substrait:deploy."
+  cur_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  [ "$cur_branch" = "$CONN_BRANCH" ] \
+    || die "this app deploys from branch '$CONN_BRANCH' but you're on '$cur_branch' — switch to (or merge into) '$CONN_BRANCH' first."
+  if git remote get-url origin >/dev/null 2>&1 \
+     && ! git remote get-url origin 2>/dev/null | grep -qi "$CONN_REPO"; then
+    echo "Warning: this checkout's 'origin' doesn't look like $CONN_REPO — continuing; the server verifies the pushed commit." >&2
+  fi
+  # Freshness: HEAD must be what's actually pushed. Fetch is best-effort (offline or
+  # credential-less fetch just skips the local check; the server still catches it).
+  git fetch -q origin "$CONN_BRANCH" 2>/dev/null || true
+  head_sha="$(git rev-parse HEAD)"
+  upstream="$(git rev-parse "origin/$CONN_BRANCH" 2>/dev/null || git rev-parse '@{u}' 2>/dev/null)" || upstream=""
+  if [ -n "$upstream" ] && [ "$head_sha" != "$upstream" ]; then
+    die "local HEAD (${head_sha:0:12}) doesn't match the pushed tip of '$CONN_BRANCH' (${upstream:0:12}) — push your commits (or pull a teammate's), then re-run /substrait:deploy."
+  fi
+
+  echo "Deploying $CONN_REPO@$CONN_BRANCH (${head_sha:0:12}) — Substrait pulls the pushed branch…"
+  substrait_call POST /api/deploy/trigger \
+    -H "Content-Type: application/json" --data "{\"expected_sha\":\"$head_sha\"}" || exit $?
+  case "${SUBSTRAIT_STATUS:-}" in
+    200|201|202) : ;;
+    409) die "deploy not triggered: $(printf '%s' "$SUBSTRAIT_BODY" | _json_field detail || printf '%s' "$SUBSTRAIT_BODY")" ;;
+    *) die "deploy trigger failed (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY" ;;
+  esac
+else
 
 # Resolve the backend stack label: explicit --stack wins, else auto-detect. Lowercased to
 # match the server's accepted shape (a short lowercase slug).
@@ -219,6 +276,8 @@ case "${SUBSTRAIT_STATUS:-}" in
   *) die "deploy failed (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY" ;;
 esac
 
+fi  # connect vs zip — both leave the same {project, run_id} body in SUBSTRAIT_BODY
+
 run_id="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field run_id)"
 # host lives under the nested "project" object; a flat first-match grep finds it (it's the
 # only preview_hostname/slug in the body), falling back to the slug-derived hostname.
@@ -227,8 +286,9 @@ host="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field preview_hostname)"
 echo "Deploy queued — run #$run_id."
 
 # 3. Submit the legacy endpoint inventory, if one exists and no repo-root openapi.json
-#    supersedes it (the spec shipped inside the zip — the platform records it
-#    server-side at deploy, so there is nothing to submit here). Runs AFTER the deploy
+#    supersedes it (the spec ships with the code — in the zip, or committed in the
+#    connected repo — and the platform records it server-side at deploy, so there is
+#    nothing to submit here). Runs AFTER the deploy
 #    fields above are parsed out of SUBSTRAIT_BODY (substrait_call overwrites the
 #    globals). Best-effort and non-fatal; a STALE file is deliberately NOT submitted —
 #    a wrong inventory is worse than last deploy's.
