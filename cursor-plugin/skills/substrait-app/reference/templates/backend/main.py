@@ -6,7 +6,12 @@ Keep:
   - API routes under /api (the ingress routes /api here; everything else → frontend,
     or to this backend when no frontend/ is shipped — then serve / yourself)
   - reading DATABASE_URL / JWT_SECRET from the environment (plus REDIS_URL /
-    KAFKA_BROKERS / QDRANT_URL for any backing service declared in substrait.yaml)
+    KAFKA_BROKERS / QDRANT_URL / OBJECT_STORAGE_BUCKET for any backing service
+    declared in substrait.yaml)
+
+Files: declare `object-storage: {}` in substrait.yaml and use storage.py next to this
+file — the same calls work locally against fake-gcs-server and deployed against the
+app's own private bucket. It is inert until you import it.
 
 Database: the platform provisions an **OceanBase** database per app and injects
 DATABASE_URL. OceanBase speaks the **MySQL wire protocol** — use the `asyncmy`

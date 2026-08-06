@@ -1,4 +1,4 @@
-<!-- BEGIN substrait-app contract (v3) — managed by the substrait plugin (link/deploy); edits inside this block are overwritten on update. Delete the whole block to opt out. -->
+<!-- BEGIN substrait-app contract (v4) — managed by the substrait plugin (link/deploy); edits inside this block are overwritten on update. Delete the whole block to opt out. -->
 ## Substrait deployment
 
 **Linked app:** __SUBSTRAIT_APP_LINK__
@@ -21,10 +21,13 @@ uploads, `--watch` follows the build to the live preview); re-link with
   The platform injects `DATABASE_URL` and `JWT_SECRET`. **All DDL lives in
   Flyway files** `backend/resources/db/migration/V*.sql` (MySQL dialect) — the app
   never `CREATE TABLE`s.
-- Backing services (redis / kafka / qdrant): declare them in a **`substrait.yaml`** at
-  the repo root (`services: {redis: {}, kafka: {persistent: true}, qdrant: {}}`) — the
-  platform provisions them and injects `REDIS_URL` / `KAFKA_BROKERS` / `QDRANT_URL`
-  only for what's declared. Ephemeral unless `persistent: true`.
+- Backing services (redis / kafka / qdrant / object-storage): declare them in a
+  **`substrait.yaml`** at the repo root (`services: {redis: {}, kafka: {persistent: true},
+  qdrant: {}, object-storage: {}}`) — the platform provisions them and injects
+  `REDIS_URL` / `KAFKA_BROKERS` / `QDRANT_URL` / `OBJECT_STORAGE_BUCKET` only for what's
+  declared. The three pod services are ephemeral unless `persistent: true`;
+  `object-storage` is a private per-app file bucket — durable, no options, no credential
+  to configure, and removing the declaration never deletes the files.
 - Custom env vars/secrets: declare in `backend/.env.example` (`NAME=value`, trailing
   `# secret` marks a secret) — the portal pre-creates them for the owner to fill in.
   Build-time frontend vars go in a committed `frontend/.env.production` (public,

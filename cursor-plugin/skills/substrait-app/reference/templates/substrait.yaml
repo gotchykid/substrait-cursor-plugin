@@ -10,13 +10,21 @@ description: >
 
 # Backing services — declare what your app needs and the platform provisions it
 # next to the app, injecting the connection env var. Installing a client library
-# alone does nothing; this manifest is the only trigger. Ephemeral by default
-# (pod restart wipes data); add `persistent: true` for a disk that survives
-# restarts and redeploys. Leave everything commented out if your app needs none
-# of these.
+# alone does nothing; this manifest is the only trigger. The three pod services
+# are ephemeral by default (pod restart wipes data); add `persistent: true` for a
+# disk that survives restarts and redeploys. Leave everything commented out if
+# your app needs none of these.
 #
 # services:
 #   redis: {}              # cache/queue      → REDIS_URL=redis://redis:6379/0
 #   kafka:                 # Kafka-compatible → KAFKA_BROKERS=kafka:9092
 #     persistent: true     #   (single-node Redpanda; 10Gi disk when persistent)
 #   qdrant: {}             # vector database  → QDRANT_URL=http://qdrant:6333
+#   object-storage: {}     # private file bucket → OBJECT_STORAGE_BUCKET (GCS SDK, signed URLs, no keys)
+#
+# object-storage takes no options — `persistent` applies only to the three pod
+# services. Its bucket is durable storage, not a cache: the files stay put across
+# redeploys, and removing the declaration does not delete them.
+#
+# scaffold_version (optional) — the skill/plugin version this app was built with.
+# /substrait:deploy stamps and refreshes it automatically; don't edit it by hand.

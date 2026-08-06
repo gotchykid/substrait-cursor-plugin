@@ -169,7 +169,7 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
   - `JWT_SECRET`
   - Backing-service connection strings, present **only for services declared in
     `substrait.yaml`** (see *Backing services* below): `REDIS_URL`, `KAFKA_BROKERS`,
-    `QDRANT_URL`.
+    `QDRANT_URL`, `OBJECT_STORAGE_BUCKET`.
 - Declare your app's **own** config (API keys, flags, third-party creds) in
   `backend/.env.example`: one `NAME=value` per line, a trailing `# secret` to mark a
   secret. On upload the platform pre-creates these under the app's Settings (prefilled
@@ -201,17 +201,30 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
     kafka:                 # → KAFKA_BROKERS=kafka:9092 (single-node Redpanda, Kafka-compatible)
       persistent: true
     qdrant: {}             # → QDRANT_URL=http://qdrant:6333 (gRPC on qdrant:6334)
+    object-storage: {}     # → OBJECT_STORAGE_BUCKET=<private per-app GCS bucket>
   ```
 
-  The catalog is exactly those three; `persistent` (default `false`) is the only option —
-  anything else fails validation at upload with the fix in the message. Ephemeral services
+  The catalog is exactly those four; `persistent` (default `false`) is the only option and
+  applies only to the three **pod** services — anything else fails validation at upload with
+  the fix in the message. Ephemeral pod services
   lose their data on pod restart (treat redis as a cache; recreate qdrant collections if
   missing at startup). `persistent: true` adds a disk that survives restarts and redeploys
-  (fixed sizes — redis 1Gi, kafka 10Gi, qdrant 5Gi). Removing a service from the manifest
+  (fixed sizes — redis 1Gi, kafka 10Gi, qdrant 5Gi). Removing a pod service from the manifest
   — or deleting the whole file — removes it on the next deploy (the disk is kept;
   re-declaring re-adopts it). The kafka
   broker trades strict fsync durability for footprint — use it for events and jobs, not as
-  a system of record. Services are reachable only from inside the app's own namespace.
+  a system of record. Pod services are reachable only from inside the app's own namespace.
+
+  **`object-storage` is not a pod** — it is a private cloud bucket belonging to the app, and
+  it behaves differently on every axis above: it takes no options, holds durable data rather
+  than cache, is reached over the network with a GCS client rather than at a namespace
+  hostname, and needs **no credential** — the pod authenticates as itself, so nothing about
+  it belongs in `.env.example`. That same identity lets the app mint **time-limited URLs**
+  for browser-direct download and upload, so large files need not stream through the pod —
+  again with no key or secret involved. Removing the declaration does **not** delete the
+  bucket or stop `OBJECT_STORAGE_BUCKET` being injected; the deploy just warns. The bucket
+  is deleted only after the whole app is deleted, and after a grace period. See
+  `reference/object-storage.md`.
 - Source only in the zip: exclude `node_modules/`, `.venv/`, `dist/`,
   `__pycache__/`, build output. Max size 16 MB (default).
 - Frontend (optional) is **any framework** that builds to a site served on **port 80** —

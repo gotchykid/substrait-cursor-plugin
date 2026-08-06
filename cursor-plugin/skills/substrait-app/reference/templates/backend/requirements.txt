@@ -1,3 +1,7 @@
 fastapi>=0.115
 uvicorn[standard]>=0.32
 asyncmy>=0.2.9          # OceanBase / MySQL-wire driver (NOT asyncpg/Postgres)
+
+# Uncomment when you declare `object-storage: {}` in substrait.yaml — storage.py
+# imports it lazily, so the app runs without it until you actually store a file.
+# google-cloud-storage>=2.18,<3

@@ -65,14 +65,57 @@ with that `DATABASE_URL`.
 
 - `DATABASE_URL` — set it yourself as above (the platform injects it in prod).
 - `JWT_SECRET` — set it in your shell only if your app reads it.
-- Backing services from `substrait.yaml` (`REDIS_URL`, `KAFKA_BROKERS`, `QDRANT_URL`) —
-  run a local equivalent and export the var. The scaffold's `docker-compose.yml` ships
-  commented-out `redis`, `kafka` (Redpanda) and `qdrant` services that match what the
-  platform provisions — uncomment the ones your manifest declares, then e.g.
-  `export REDIS_URL=redis://localhost:6379/0`, `KAFKA_BROKERS=localhost:9092`,
-  `QDRANT_URL=http://localhost:6333`.
+- Backing services from `substrait.yaml` (`REDIS_URL`, `KAFKA_BROKERS`, `QDRANT_URL`,
+  `OBJECT_STORAGE_BUCKET`) — run a local equivalent and export the var. The scaffold's
+  `docker-compose.yml` ships commented-out `redis`, `kafka` (Redpanda), `qdrant` and `gcs`
+  (fake-gcs-server) services that match what the platform provisions — uncomment the ones
+  your manifest declares, then e.g. `export REDIS_URL=redis://localhost:6379/0`,
+  `KAFKA_BROKERS=localhost:9092`, `QDRANT_URL=http://localhost:6333`.
 - Custom config from `backend/.env.example` — export the ones you need, or `source` a
   local `.env` (don't commit real secrets).
+
+## Object storage locally (fake-gcs-server)
+
+`object-storage` is the one backing service that is a **cloud bucket**, not a pod — so
+locally you run `fake-gcs-server`, which speaks the real GCS API. The scaffold's
+`backend/storage.py` is the only file that knows the difference, and it decides from
+`STORAGE_EMULATOR_HOST`: your app code is identical in both places.
+
+```bash
+docker compose up -d gcs                              # fake-gcs-server on :4443
+export OBJECT_STORAGE_BUCKET=local-dev                # any name; deployed, the platform sets it
+export STORAGE_EMULATOR_HOST=http://localhost:4443    # set ONLY locally
+pip install google-cloud-storage                      # uncomment it in requirements.txt too
+```
+
+Then check it end to end from the backend directory:
+
+```python
+>>> import storage
+>>> storage.put_bytes("demo/hello.txt", b"hi", content_type="text/plain")
+'demo/hello.txt'
+>>> storage.get_bytes("demo/hello.txt")
+b'hi'
+>>> storage.list_keys("demo/")
+['demo/hello.txt']
+```
+
+Notes that will save you an afternoon:
+
+- **No setup step.** `storage.py` creates the bucket on first use against the emulator.
+- **The data is in-memory**, so `docker compose restart gcs` empties it (the helper
+  survives that — it recreates the bucket on the next call). For files that persist across
+  restarts, switch the compose command to `-backend filesystem -filesystem-root /data` and
+  mount a volume.
+- **Unset `STORAGE_EMULATOR_HOST` when you're not using the emulator.** It is the one
+  switch; if it's left exported, a deployed-style run will still talk to localhost.
+- The emulator has **no IAM**, so it cannot tell you whether your deployed permissions are
+  right — it proves your *code* works, not your access.
+- **Signed URLs are not really signed here.** fake-gcs-server doesn't implement V4
+  signatures, so `storage.download_url()` returns a plain object URL with no expiry and
+  `storage.upload_url()` raises `NotImplementedError` instead of handing back a URL that
+  would fail confusingly. Use `put_bytes()` locally; test browser-direct uploads and URL
+  expiry in a deployed environment. Detail: `reference/object-storage.md`.
 
 ## Notes
 

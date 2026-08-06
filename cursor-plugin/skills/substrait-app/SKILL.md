@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.07.30.120000
+version: 2026.08.03.090000
 description: Build apps that deploy on the Substrait platform via upload mode (GitHub-connected apps deploy from their pushed branch with the same commands — no zip). Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -28,7 +28,7 @@ Everything the platform actually enforces is here, and it's all stack-neutral:
 | **Frontend Dockerfile** | Required **only when you ship a `frontend/`**: `cicd/Dockerfile.frontend` (or `frontend/Dockerfile`). Must serve the built site on **port 80**. |
 | **Database** | Always **OceanBase** (MySQL wire protocol). The platform provisions one per app and injects `DATABASE_URL`; use a **MySQL** driver for your stack. There is no other DB option. |
 | **Migrations** | All DDL in **Flyway** SQL at `backend/resources/db/migration/V*.sql` (MySQL/OceanBase dialect) — never `CREATE TABLE` from application code. OceanBase rejects some valid-MySQL DDL (a failed migration blocks all later deploys until a platform operator repairs it) — see *Migration DDL: OceanBase gotchas* in `reference/deploy-contract.md`. |
-| **App manifest** | REQUIRED — a **`substrait.yaml`** at the repo root with a `description:` (1–3 sentences: what the app does and who it's for — recorded onto the app at deploy; a missing manifest or description fails validation). Backing services (redis / kafka / qdrant) are declared in the same file — optional, but a used service MUST be declared. See *App manifest* below. |
+| **App manifest** | REQUIRED — a **`substrait.yaml`** at the repo root with a `description:` (1–3 sentences: what the app does and who it's for — recorded onto the app at deploy; a missing manifest or description fails validation). Backing services (redis / kafka / qdrant / object-storage) are declared in the same file — optional, but a used service MUST be declared. See *App manifest* below. |
 | **No k8s, no slug** | Never write `k8s/` or reference the app slug — the platform owns both. Any `k8s/` you include is discarded. |
 | **Source only, ≤ 16 MB** | Exclude `node_modules/`, `.venv/`, `dist/`, `__pycache__/` and other build artifacts. |
 
@@ -48,6 +48,7 @@ cicd/
   nginx.conf                        # scaffold's static-site server; referenced by the scaffold Dockerfile.frontend
 backend/                            # your backend, in any language (scaffold: FastAPI)
   ...                               # scaffold ships main.py + requirements.txt; yours can be anything
+  storage.py                        # OPTIONAL — scaffold's object-storage helper; inert until you import it
   .env.example                      # OPTIONAL — declare custom env vars + secrets (prefilled in the portal)
   resources/db/migration/V*.sql     # OPTIONAL — Flyway migrations (MySQL/OceanBase dialect)
 frontend/                           # OPTIONAL — any framework (scaffold: React + Vite + Tailwind)
@@ -70,7 +71,8 @@ environment, never commit them:
     Full snippet + a Go backend Dockerfile: `reference/deploy-contract.md` → *Other backend stacks*.
 - **`JWT_SECRET`**
 - **Per declared backing service** (see next section): **`REDIS_URL`**, **`KAFKA_BROKERS`**,
-  **`QDRANT_URL`** — injected **only** when the service is declared in `substrait.yaml`.
+  **`QDRANT_URL`**, **`OBJECT_STORAGE_BUCKET`** — injected **only** when the service is
+  declared in `substrait.yaml`.
 
 Whatever the stack, the database is **MySQL**, never Postgres, and all schema lives in
 Flyway migrations (below) — your code only reads and writes rows.
@@ -95,22 +97,77 @@ services:
   kafka:                   # Kafka-compatible   → injects KAFKA_BROKERS (kafka:9092)
     persistent: true       #   (single-node Redpanda under the hood)
   qdrant: {}               # vector database    → injects QDRANT_URL  (http://qdrant:6333)
+  object-storage: {}       # private file bucket → injects OBJECT_STORAGE_BUCKET
 ```
 
-- Those three are the whole catalog; `persistent` is the only option. Anything else
-  fails validation with the fix in the message.
-- **Ephemeral by default**: a service pod restart wipes its data — treat redis as a
-  cache, recreate qdrant collections on startup if missing. Set `persistent: true` for
-  a disk that survives restarts and redeploys (kafka log: 10Gi, qdrant: 5Gi, redis
-  AOF: 1Gi — fixed sizes).
-- Removing a service from the manifest removes it on the next deploy (its disk is kept
-  until the app itself is deleted; re-declaring `persistent: true` re-adopts the data).
+- Those four are the whole catalog; `persistent` applies only to the three pod services —
+  `object-storage` takes no options. Anything else fails validation with the fix in the
+  message.
+- **Pod services are ephemeral by default**: a service pod restart wipes its data — treat
+  redis as a cache, recreate qdrant collections on startup if missing. Set
+  `persistent: true` for a disk that survives restarts and redeploys (kafka log: 10Gi,
+  qdrant: 5Gi, redis AOF: 1Gi — fixed sizes).
+- Removing a **pod** service from the manifest removes it on the next deploy (its disk is
+  kept until the app itself is deleted; re-declaring `persistent: true` re-adopts the data).
   Deleting the whole `substrait.yaml` is not an option — the file is required.
+- **`object-storage` is durable, and removing it deletes nothing** — see *Object storage
+  (files)* below for its lifecycle.
 - kafka favours a small footprint over strict durability (relaxed fsync) — fine for
   events/jobs; don't treat it as a system of record.
-- Services are reachable **only from inside the app's own namespace** at `redis:6379`,
-  `kafka:9092`, `qdrant:6333/6334` (gRPC). Need Pinecone or another SaaS instead? Just
-  declare its API key in `.env.example` — no manifest entry.
+- The pod services are reachable **only from inside the app's own namespace** at
+  `redis:6379`, `kafka:9092`, `qdrant:6333/6334` (gRPC). Need Pinecone or another SaaS
+  instead? Just declare its API key in `.env.example` — no manifest entry.
+- The manifest may also carry an **optional `scaffold_version:`** — the version of this
+  skill the app was built with, which the platform records on each deploy (it powers
+  scaffold-staleness reporting). **Don't write or edit it by hand**: `/substrait:deploy`
+  stamps it automatically from the installed skill. Manifests without it stay valid.
+
+### Object storage (files)
+
+Declaring `object-storage: {}` gets the app a **private bucket of its own** and one injected
+variable, **`OBJECT_STORAGE_BUCKET`** (the bucket name). Use it for anything a database row
+shouldn't hold — uploads, generated PDFs, images, exports.
+
+```python
+import storage                       # backend/storage.py, shipped in the scaffold
+
+key = storage.safe_key(tenant_id, user_id, "report.pdf")   # never a raw client filename
+storage.put_bytes(key, pdf_bytes, content_type="application/pdf")
+data = storage.get_bytes(key)
+storage.list_keys(f"{tenant_id}/")
+storage.delete(key)                  # a no-op if it's already gone
+
+link = storage.download_url(key)     # time-limited URL — let the browser fetch it directly
+```
+
+- **Nothing to configure.** The pod authenticates to the bucket itself; there is no key, no
+  secret and no credential to put in `.env.example`. Read `OBJECT_STORAGE_BUCKET` and go.
+- **Any language works.** The scaffold's `backend/storage.py` wraps Google's
+  `google-cloud-storage` SDK, but the bucket is plain GCS — use whichever GCS client your
+  stack has, and let it pick up Application Default Credentials.
+- **Isolation is enforced by the platform**, not by your code: an app can reach its own
+  bucket and no other, and buckets can never be made public (`make_public()` fails by
+  design — that failure is the platform working).
+- **Durable, and it outlives the manifest.** Files survive redeploys, rollbacks, and even
+  removing the declaration (the variable keeps being injected and the bucket stays yours;
+  you just get a warning). The bucket is deleted only well after the whole **app** is
+  deleted.
+- **It is not a backup.** Keep your object keys in the database — that's the index; the
+  bucket is the bytes.
+- **Big files need not pass through your pod.** `download_url()` and `upload_url()` mint
+  **time-limited URLs** (15 minutes for downloads, 5 for uploads) that the browser uses
+  directly — signed with the app's own identity, so still no key anywhere. Authorize the
+  request *before* you mint one and keep the expiry short: a signed URL bypasses your app
+  and **cannot be revoked**.
+- **Multi-tenant apps must prefix keys by tenant** and re-validate that prefix on every
+  read, write and sign. The platform isolates you from *other apps*; it cannot isolate your
+  own tenants from each other.
+- **Locally** it's `docker compose up -d gcs` (fake-gcs-server) plus two exports — the same
+  code, unchanged. The emulator does not verify signatures, so signed flows are only really
+  tested once deployed. See `reference/local-dev.md`.
+
+Full guide, including a copy-paste FastAPI upload/download pair and the rules for signed
+URLs: `reference/object-storage.md`.
 
 ## Declaring custom env vars & secrets
 
@@ -127,7 +184,8 @@ THIRD_PARTY_API_KEY=     # secret      ← mark a secret with a trailing "# secr
 - One `NAME=value` per line; the value is the prefilled placeholder (may be empty).
 - Add a trailing `# secret` to store it write-only (masked in the portal).
 - Do **not** list `DATABASE_URL`, `JWT_SECRET`, or the backing-service vars
-  (`REDIS_URL`, `KAFKA_BROKERS`, `QDRANT_URL`) — the platform injects those.
+  (`REDIS_URL`, `KAFKA_BROKERS`, `QDRANT_URL`, `OBJECT_STORAGE_BUCKET`) — the platform
+  injects those.
 - Read them at runtime from the environment; never commit real secret values.
 - Re-uploading only adds new keys — it never overwrites a value the user has set in the portal.
 - Real values are set either on the app's Settings page in the portal or from the linked
@@ -256,7 +314,8 @@ and point `DATABASE_URL` at it. See `reference/local-dev.md` for the full guide.
 > app's auto-deploy toggle is enabled in the portal.
 
 See `reference/deploy-contract.md` for the full spec, `reference/local-dev.md` for running
-locally, and `reference/templates/` for the copy-paste-ready FastAPI + React scaffold.
+locally, `reference/object-storage.md` for the file bucket, and `reference/templates/` for
+the copy-paste-ready FastAPI + React scaffold.
 
 ## The API Library (designing against existing APIs)
 

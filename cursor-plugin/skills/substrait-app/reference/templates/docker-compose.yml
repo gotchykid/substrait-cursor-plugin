@@ -17,7 +17,10 @@
 # point DATABASE_URL at it.
 services:
   db:
-    image: mysql:8
+    # Pinned to 8.0: mysql:8 now resolves to 8.4+, whose caching_sha2_password
+    # handshake makes Flyway 10 retry forever ("serverRsaPublicKeyFile not set")
+    # instead of failing — a silent hang on the documented migrate step.
+    image: mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: app
@@ -35,7 +38,7 @@ services:
   migrate:
     image: flyway/flyway:10
     command: >
-      -url=jdbc:mysql://db:3306/app
+      -url=jdbc:mysql://db:3306/app?allowPublicKeyRetrieval=true
       -user=root -password=root
       -connectRetries=30
       -locations=filesystem:/flyway/sql
@@ -49,7 +52,8 @@ services:
   # Local stand-ins for the backing services in substrait.yaml — uncomment the ones
   # your manifest declares, then export the matching env var (see the skill's
   # local-dev reference): REDIS_URL=redis://localhost:6379/0,
-  # KAFKA_BROKERS=localhost:9092, QDRANT_URL=http://localhost:6333.
+  # KAFKA_BROKERS=localhost:9092, QDRANT_URL=http://localhost:6333,
+  # OBJECT_STORAGE_BUCKET=local-dev + STORAGE_EMULATOR_HOST=http://localhost:4443.
   #
   # redis:
   #   image: redis:7.4-alpine
@@ -71,6 +75,19 @@ services:
   #   ports:
   #     - "6333:6333"
   #     - "6334:6334"
+  #
+  # gcs:  # object-storage stand-in — fake-gcs-server speaks the real GCS API, so the
+  #       # google-cloud-storage SDK (backend/storage.py) runs completely unchanged.
+  #       #   export OBJECT_STORAGE_BUCKET=local-dev
+  #       #   export STORAGE_EMULATOR_HOST=http://localhost:4443
+  #       # backend/storage.py creates the bucket on first use, so there is no setup step.
+  #       # Data is in-memory: `docker compose restart gcs` empties it. To keep files across
+  #       # restarts swap for `-backend filesystem -filesystem-root /data` and mount a volume.
+  #   image: fsouza/fake-gcs-server:1.52
+  #   command: ["-scheme", "http", "-port", "4443",
+  #             "-public-host", "localhost:4443", "-backend", "memory"]
+  #   ports:
+  #     - "4443:4443"
 
 volumes:
   dbdata:

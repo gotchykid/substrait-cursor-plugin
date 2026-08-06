@@ -146,6 +146,32 @@ compliance_preflight() {
   die "not Substrait-compliant: a k8s/ directory is present — the platform owns the Kubernetes manifests and discards anything you ship there. Remove k8s/ and re-run /substrait:deploy."
 }
 
+# ── scaffold_version stamp ────────────────────────────────────────────────────────
+# Record which skill/plugin version built this app: stamp `scaffold_version:` into
+# substrait.yaml from the installed SKILL.md (self-located — same layout in the Cursor
+# plugin), where the platform records it at deploy. The key is optional server-side,
+# so anything unreadable here just skips (never blocks a deploy). For connected apps
+# the stamp lands BEFORE the clean-tree gate on purpose: a changed manifest must be
+# committed + pushed to ship, and that gate's message already says exactly that.
+stamp_scaffold_version() {
+  [ -f substrait.yaml ] || return 0   # the preflight owns the missing-manifest error
+  local skill_md="$DIR/../skills/substrait-app/SKILL.md" ver cur
+  [ -f "$skill_md" ] || return 0
+  ver="$(sed -n 's/^version:[[:space:]]*//p' "$skill_md" | head -1 | tr -d '[:space:]')"
+  [ -n "$ver" ] || return 0
+  cur="$(sed -n 's/^[[:space:]]*scaffold_version[[:space:]]*:[[:space:]]*//p' substrait.yaml | head -1 | tr -d "[:space:]\"'")"
+  [ "$cur" = "$ver" ] && return 0
+  if [ -n "$cur" ]; then
+    # -i.bak + rm: the one in-place form both BSD and GNU sed accept.
+    sed -i.bak "s/^\([[:space:]]*scaffold_version[[:space:]]*:\).*/\1 $ver/" substrait.yaml \
+      && rm -f substrait.yaml.bak
+  else
+    printf '\n# Skill/plugin version this app was last deployed with — stamped by\n# /substrait:deploy; do not edit by hand.\nscaffold_version: %s\n' "$ver" >> substrait.yaml
+  fi
+  echo "Stamped scaffold_version $ver into substrait.yaml."
+}
+stamp_scaffold_version
+
 echo "Checking Substrait compliance…"
 compliance_preflight
 echo "Compliance OK."
