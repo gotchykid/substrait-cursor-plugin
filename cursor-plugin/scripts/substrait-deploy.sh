@@ -11,6 +11,10 @@
 #   endpoints        submit .substrait/endpoints.json only, no deploy — legacy
 #                    inventory-only fallback (prefer a repo-root openapi.json,
 #                    which ships in the zip and is picked up server-side)
+#   check            run the compliance audit only — no link, no token, no deploy,
+#                    mutates nothing. Reports EVERY violation (the deploy preflight
+#                    stops at the same checks). Exit 0 = compliant. Used by
+#                    /substrait:init to audit a project before converting it.
 # The platform is stack-agnostic (any Dockerfile that EXPOSEs 8000 + serves /health works);
 # the stack is just a label shown in the portal. The app is determined by the project's
 # .substrait/config.json — either its app-scoped deploy token, or (with an account link)
@@ -27,15 +31,30 @@ die() { echo "Error: $*" >&2; exit 1; }
 WATCH=0
 STACK=""
 ENDPOINTS_ONLY=0
+CHECK_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     endpoints) ENDPOINTS_ONLY=1; shift ;;
+    check) CHECK_ONLY=1; shift ;;
     --watch) WATCH=1; shift ;;
     --stack) shift; STACK="${1:-}"; [ -n "$STACK" ] || die "--stack needs a value (e.g. node, go, fastapi)"; shift ;;
     --stack=*) STACK="${1#*=}"; shift ;;
     *) die "unknown arg: $1" ;;
   esac
 done
+
+# `check` mode: audit-only, before any link/token gates — an unlinked (or
+# not-yet-Substrait) project must be checkable, that's the point. Read-only:
+# no scaffold_version stamp, no packaging, no network.
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  echo "Checking Substrait compliance…"
+  if out="$(substrait_compliance_check)"; then
+    echo "Compliant — the project meets the deploy contract's static checks."
+    exit 0
+  fi
+  printf '%s\n' "$out"
+  exit 1
+fi
 
 # detect_stack — best-effort guess of the backend stack from declaration files, so the
 # label shown in the portal reflects what was actually shipped without the user passing
@@ -109,41 +128,15 @@ if [ "$ENDPOINTS_ONLY" -eq 1 ]; then
   exit 0
 fi
 
-# Compliance preflight — fail fast & locally on the cheap, high-value parts of the deploy
-# contract before we package and upload anything. This MIRRORS the server's authoritative
-# check (`infra.validate_app`): a backend Dockerfile is required; a frontend one too when
-# a frontend/ is shipped; k8s/ is platform-owned and must not be present. The server still
-# runs the full (incl. behavioural) validation in VALIDATING — this just turns the common
-# failures into an actionable local error instead of a failed remote run.
-#   BACKEND_DOCKERFILES : cicd/Dockerfile.backend, cicd/Dockerfile, backend/Dockerfile
-#   FRONTEND_DOCKERFILES: cicd/Dockerfile.frontend, frontend/Dockerfile
+# Compliance preflight — fail fast & locally on the cheap, high-value parts of the
+# deploy contract before we package and upload anything. The checks themselves live in
+# substrait_compliance_check (substrait-common.sh) — shared with the standalone `check`
+# mode above and /substrait:init — this wrapper just turns violations into a fatal error.
 compliance_preflight() {
-  local f
-  local backend_df=""
-  for f in cicd/Dockerfile.backend cicd/Dockerfile backend/Dockerfile; do
-    if [ -f "$f" ]; then backend_df="$f"; break; fi
-  done
-  [ -n "$backend_df" ] || die "not Substrait-compliant: no backend Dockerfile found — every app must ship one of cicd/Dockerfile.backend, cicd/Dockerfile or backend/Dockerfile (start from the scaffold's cicd/Dockerfile.backend). It must EXPOSE 8000, serve GET /health, and your API under /api. Fix this and re-run /substrait:deploy."
-
-  if [ -d frontend ]; then
-    local frontend_df=""
-    for f in cicd/Dockerfile.frontend frontend/Dockerfile; do
-      if [ -f "$f" ]; then frontend_df="$f"; break; fi
-    done
-    [ -n "$frontend_df" ] || die "not Substrait-compliant: frontend/ is present but ships no Dockerfile — add one of cicd/Dockerfile.frontend or frontend/Dockerfile (start from the scaffold's cicd/Dockerfile.frontend). It must serve the built SPA on port 80. Fix this and re-run /substrait:deploy."
-  fi
-
-  # substrait.yaml is REQUIRED, with a real description — mirrors the server's
-  # VALIDATING check so the failure is local and instant instead of a failed run.
-  [ -f substrait.yaml ] || die "not Substrait-compliant: no substrait.yaml at the project root — every app ships one with a \`description:\` (what the app does and who it's for; shown in the portal and the API Library) plus any backing services. If the app already uses redis/kafka/qdrant, declare them under \`services:\` — omitting a service removes it. Add the file and re-run /substrait:deploy."
-  grep -Eq '^[[:space:]]*description[[:space:]]*:' substrait.yaml \
-    || die "not Substrait-compliant: substrait.yaml has no \`description:\` — add one to three sentences on what the app does and who it's for, then re-run /substrait:deploy."
-  if grep -q 'Describe your app here' substrait.yaml; then
-    die "not Substrait-compliant: substrait.yaml still carries the scaffold placeholder description — replace it with what this app actually does, then re-run /substrait:deploy."
-  fi
-
-  [ -d k8s ] || return 0
-  die "not Substrait-compliant: a k8s/ directory is present — the platform owns the Kubernetes manifests and discards anything you ship there. Remove k8s/ and re-run /substrait:deploy."
+  local out
+  if out="$(substrait_compliance_check)"; then return 0; fi
+  printf '%s\n' "$out" >&2
+  die "not Substrait-compliant — fix the issue(s) above and re-run /substrait:deploy."
 }
 
 # ── scaffold_version stamp ────────────────────────────────────────────────────────

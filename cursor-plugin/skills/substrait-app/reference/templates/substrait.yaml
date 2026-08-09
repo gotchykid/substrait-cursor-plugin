@@ -8,6 +8,19 @@
 description: >
   Describe your app here: what it does, the data it manages, and who uses it.
 
+# Database — EXPLICIT: the platform provisions a database (and injects
+# DATABASE_URL) only when this key is present. Three engines:
+#   oceanbase  (default) shared HA cluster, MySQL wire protocol; nightly backups
+#              and the portal's Database tab (browse/migrate/repair/reset).
+#   postgres   your app's own single-node Postgres pod + 10Gi disk.
+#   mysql      your app's own single-node MySQL 8 pod + 10Gi disk.
+# The pod engines give you the real engine's semantics, but with NO replication,
+# NO platform backups and no Database-tab tooling — pick one only if your app
+# actually needs it. The engine cannot be changed after the first deploy.
+# The scaffold ships migrations, so it declares a database; if your app truly
+# uses none, remove this key AND backend/resources/db/migration/.
+database: oceanbase
+
 # Backing services — declare what your app needs and the platform provisions it
 # next to the app, injecting the connection env var. Installing a client library
 # alone does nothing; this manifest is the only trigger. The three pod services

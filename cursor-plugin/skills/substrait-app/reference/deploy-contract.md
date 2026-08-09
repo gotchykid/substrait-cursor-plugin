@@ -159,13 +159,29 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
   purely behavioural (the scaffold happens to use FastAPI). Meet the points below and you're done.
 - Listen on **port 8000**; serve **`GET /health`** (200, the readiness probe) and your
   API under **`/api`** (so the ingress routes it to the backend).
-- Database is **always OceanBase** — the platform provisions a per-app OceanBase DB and
-  injects `DATABASE_URL`. There is no other database option (no Postgres/SQLite).
+- Database is **declared explicitly** in `substrait.yaml` — without a `database:` key
+  there is **no database and no `DATABASE_URL`**, and shipping Flyway migrations
+  anyway fails VALIDATING. Three engines:
+  - `oceanbase` — a database on the platform's shared, multi-zone HA cluster (MySQL
+    wire protocol). Nightly backups; the portal's Database tab (browse / migrate /
+    repair / reset) works. **The default; use it unless you need otherwise.**
+  - `postgres` / `mysql` — the app's **own single-node pod** (10Gi disk) in its
+    namespace, reachable at `postgres:5432` / `mysql:3306`. Real engine semantics, at
+    dev/internal-tool grade: one replica, **no HA, no platform backups, no Database-tab
+    tooling**. Deploys still run Flyway normally.
+
+  The engine is **fixed once deployed** — there is no cross-engine data migration, so
+  changing the value fails the deploy instead of handing the app an empty database of
+  the other kind. Removing the declaration never deletes a provisioned DB (or its
+  disk); data is dropped only with the app itself.
 - Read secrets from env (injected via the `app-secrets` Secret):
-  - `DATABASE_URL` — OceanBase (MySQL-wire), `mysql://user:pass@host:2881/db`. Use a
-    **MySQL** driver, never PostgreSQL (`asyncpg`/`$1`). Python (scaffold): `asyncmy` +
-    `%s` placeholders. Go/other stacks: convert the `mysql://` URL to your driver's DSN —
-    see *Connecting from Go & other stacks* below.
+  - `DATABASE_URL` (only when `database:` is declared) — scheme follows the engine.
+    `oceanbase`/`mysql` → `mysql://user:pass@host:port/db`: use a **MySQL** driver,
+    never PostgreSQL (`asyncpg`/`$1`); Python (scaffold): `asyncmy` + `%s`
+    placeholders. `postgres` → `postgresql://user:pass@postgres:5432/app`: use a
+    Postgres driver (`asyncpg`/`psycopg`) with `$1`-style placeholders. Go/other
+    stacks: convert the URL to your driver's DSN — see *Connecting from Go & other
+    stacks* below.
   - `JWT_SECRET`
   - Backing-service connection strings, present **only for services declared in
     `substrait.yaml`** (see *Backing services* below): `REDIS_URL`, `KAFKA_BROKERS`,
@@ -186,7 +202,9 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
   with a top-level `description:` — 1–3 sentences on what the app does and who it's
   for (≤ 2000 chars). Each deploy records it onto the app; the portal and the API
   Library show it. A missing manifest, a missing description, or the scaffold's
-  untouched placeholder fails VALIDATING with the fix in the message.
+  untouched placeholder fails VALIDATING with the fix in the message. The manifest
+  also carries the app's `database:` declaration (above) and its backing services
+  (below).
 - **Backing services** (optional): declare in the same `substrait.yaml` and the
   platform provisions them in the app's namespace, injecting the connection env var.
   Installing a client library does nothing by itself — the manifest is the only
@@ -196,6 +214,7 @@ VITE_SENTRY_DSN=https://abc@o0.ingest.sentry.io/0
   ```yaml
   description: >
     Tracks team leave requests with an approvals workflow, for people managers.
+  database: oceanbase      # or postgres | mysql; omit if the app uses no database
   services:
     redis: {}              # → REDIS_URL=redis://redis:6379/0
     kafka:                 # → KAFKA_BROKERS=kafka:9092 (single-node Redpanda, Kafka-compatible)
@@ -302,6 +321,9 @@ Apps without SSO enabled need none of this — but shipping the Bearer check any
 cheap insurance.
 
 ## Migration DDL: OceanBase gotchas
+
+**This section applies only to `database: oceanbase` apps** — `postgres` and `mysql`
+run the real engine, accept both shapes below, and are not linted for them.
 
 Migrations run against **OceanBase in MySQL mode**, which rejects a few DDL shapes that
 real MySQL accepts. A local MySQL/MariaDB happily applies them, so they surface only at

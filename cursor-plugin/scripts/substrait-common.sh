@@ -115,6 +115,69 @@ substrait_anon_call() {
   return $rc
 }
 
+# ── Deploy-contract compliance ──────────────────────────────────────────────────
+# substrait_compliance_check — audit the CWD (run from the project root) against the
+# cheap, high-value, statically-checkable parts of the deploy contract. This MIRRORS
+# the server's authoritative check (`infra.validate_app`); the server still runs the
+# full (incl. behavioural) validation in VALIDATING — this exists so the common
+# failures become actionable local errors instead of a failed remote run.
+# Prints one "✗ …" line per violation (each with its fix) to stdout and returns the
+# number of violations, so callers can gate (deploy preflight), report everything at
+# once (init / `deploy check`), or both. Read-only: mutates nothing.
+substrait_compliance_check() {
+  local fails=0 f backend_df="" frontend_df=""
+  # Backend Dockerfile: cicd/Dockerfile.backend, cicd/Dockerfile, or backend/Dockerfile.
+  for f in cicd/Dockerfile.backend cicd/Dockerfile backend/Dockerfile; do
+    if [ -f "$f" ]; then backend_df="$f"; break; fi
+  done
+  if [ -z "$backend_df" ]; then
+    echo "✗ no backend Dockerfile — every app must ship one of cicd/Dockerfile.backend, cicd/Dockerfile or backend/Dockerfile (start from the scaffold's cicd/Dockerfile.backend). It must EXPOSE 8000, serve GET /health, and your API under /api."
+    fails=$((fails+1))
+  fi
+  # Frontend Dockerfile is required only when a frontend/ is shipped.
+  if [ -d frontend ]; then
+    for f in cicd/Dockerfile.frontend frontend/Dockerfile; do
+      if [ -f "$f" ]; then frontend_df="$f"; break; fi
+    done
+    if [ -z "$frontend_df" ]; then
+      echo "✗ frontend/ is present but ships no Dockerfile — add one of cicd/Dockerfile.frontend or frontend/Dockerfile (start from the scaffold's cicd/Dockerfile.frontend). It must serve the built site on port 80."
+      fails=$((fails+1))
+    fi
+  fi
+  # substrait.yaml is REQUIRED, with a real (non-placeholder) description.
+  if [ ! -f substrait.yaml ]; then
+    echo "✗ no substrait.yaml at the project root — every app ships one with a \`description:\` (what the app does and who it's for; shown in the portal and the API Library) plus any backing services it uses (redis/kafka/qdrant/object-storage) under \`services:\` — omitting a declared service removes it."
+    fails=$((fails+1))
+  elif ! grep -Eq '^[[:space:]]*description[[:space:]]*:' substrait.yaml; then
+    echo "✗ substrait.yaml has no \`description:\` — add one to three sentences on what the app does and who it's for."
+    fails=$((fails+1))
+  elif grep -q 'Describe your app here' substrait.yaml; then
+    echo "✗ substrait.yaml still carries the scaffold placeholder description — replace it with what this app actually does."
+    fails=$((fails+1))
+  fi
+  # The database is explicit: Flyway migrations without a `database:` engine in the
+  # manifest fail server-side VALIDATING (the DB is only provisioned when declared),
+  # so mirror it here. Checked only when a manifest exists — the missing-manifest
+  # violation above already covers the rest.
+  if [ -f substrait.yaml ] \
+     && ! grep -Eq '^[[:space:]]*database[[:space:]]*:' substrait.yaml; then
+    local mig_dir
+    for mig_dir in backend/resources/db/migration resources/db/migration; do
+      if [ -d "$mig_dir" ] && ls "$mig_dir"/*.sql >/dev/null 2>&1; then
+        echo "✗ the app ships Flyway migrations ($mig_dir/) but substrait.yaml declares no \`database:\` — the platform provisions the database (and injects DATABASE_URL) only when declared. Add \`database: oceanbase\` (the default; or \`postgres\`/\`mysql\` for the app's own single-node pod) to substrait.yaml, or remove the migrations if the app truly uses no database."
+        fails=$((fails+1))
+        break
+      fi
+    done
+  fi
+  # k8s/ is platform-owned and must not be shipped.
+  if [ -d k8s ]; then
+    echo "✗ a k8s/ directory is present — the platform owns the Kubernetes manifests and discards anything you ship there. Remove k8s/."
+    fails=$((fails+1))
+  fi
+  return $fails
+}
+
 # ── Project memory (CLAUDE.md) ──────────────────────────────────────────────────
 # The plugin maintains a marker-delimited "Substrait deployment" block in the
 # project's agent-memory file, so every future session in the project knows the

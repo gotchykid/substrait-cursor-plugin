@@ -1,6 +1,6 @@
 ---
 name: substrait-app
-version: 2026.08.07.110000
+version: 2026.08.09.140000
 description: Build apps that deploy on the Substrait platform via upload mode (GitHub-connected apps deploy from their pushed branch with the same commands — no zip). Use whenever the user asks to build, scaffold, or package an app "for Substrait", "to upload to Substrait", or for the Substrait upload/deploy contract. The zip contains app code plus its Dockerfile(s): a backend that serves GET /health on port 8000 with its API under /api (any language or framework — the scaffold uses FastAPI) and a cicd/Dockerfile.backend, plus Flyway migrations, and an optional frontend served on port 80 (any framework — the scaffold uses React + Vite + Tailwind) with a cicd/Dockerfile.frontend. The platform generates only the Kubernetes manifests, so you never write k8s or deal with the app slug.
 ---
 
@@ -26,9 +26,9 @@ Everything the platform actually enforces is here, and it's all stack-neutral:
 |---|---|
 | **Backend Dockerfile** | `cicd/Dockerfile.backend` (or `cicd/Dockerfile`, or `backend/Dockerfile`). Must `EXPOSE 8000`, serve **`GET /health`** (returns 200 — the readiness probe), and serve the API under **`/api`**. |
 | **Frontend Dockerfile** | Required **only when you ship a `frontend/`**: `cicd/Dockerfile.frontend` (or `frontend/Dockerfile`). Must serve the built site on **port 80**. |
-| **Database** | Always **OceanBase** (MySQL wire protocol). The platform provisions one per app and injects `DATABASE_URL`; use a **MySQL** driver for your stack. There is no other DB option. |
-| **Migrations** | All DDL in **Flyway** SQL at `backend/resources/db/migration/V*.sql` (MySQL/OceanBase dialect) — never `CREATE TABLE` from application code. OceanBase rejects some valid-MySQL DDL (a failed migration blocks all later deploys until a platform operator repairs it) — see *Migration DDL: OceanBase gotchas* in `reference/deploy-contract.md`. |
-| **App manifest** | REQUIRED — a **`substrait.yaml`** at the repo root with a `description:` (1–3 sentences: what the app does and who it's for — recorded onto the app at deploy; a missing manifest or description fails validation). Backing services (redis / kafka / qdrant / object-storage) are declared in the same file — optional, but a used service MUST be declared. See *App manifest* below. |
+| **Database** | **Declared explicitly** in `substrait.yaml`: `database: oceanbase` (shared HA cluster, MySQL wire), `database: postgres` or `database: mysql` (your app's own single-node pod + disk). The platform provisions it and injects `DATABASE_URL` **only when declared** — no declaration → no database, no `DATABASE_URL`, and shipping migrations without one **fails validation**. Pick with *Choosing an engine* below. |
+| **Migrations** | All DDL in **Flyway** SQL at `backend/resources/db/migration/V*.sql`, in your engine's dialect — never `CREATE TABLE` from application code. Requires a `database:` declaration. **On OceanBase only**, some valid-MySQL DDL is rejected (a failed migration blocks all later deploys until repaired) — see *Migration DDL: OceanBase gotchas* in `reference/deploy-contract.md`. |
+| **App manifest** | REQUIRED — a **`substrait.yaml`** at the repo root with a `description:` (1–3 sentences: what the app does and who it's for — recorded onto the app at deploy; a missing manifest or description fails validation). The database (`database: oceanbase`) and backing services (redis / kafka / qdrant / object-storage) are declared in the same file — a used database/service MUST be declared. See *App manifest* below. |
 | **No k8s, no slug** | Never write `k8s/` or reference the app slug — the platform owns both. Any `k8s/` you include is discarded. |
 | **Source only, ≤ 16 MB** | Exclude `node_modules/`, `.venv/`, `dist/`, `__pycache__/` and other build artifacts. |
 
@@ -52,7 +52,7 @@ backend/                            # your backend, in any language (scaffold: F
   .env.example                      # OPTIONAL — declare custom env vars + secrets (prefilled in the portal)
   resources/db/migration/V*.sql     # OPTIONAL — Flyway migrations (MySQL/OceanBase dialect)
 frontend/                           # OPTIONAL — any framework (scaffold: React + Vite + Tailwind)
-substrait.yaml                      # REQUIRED — app description (+ optional backing services)
+substrait.yaml                      # REQUIRED — app description (+ database + backing services)
 docker-compose.yml                  # OPTIONAL — local-dev DB + Flyway runner; ignored by the platform
 .claude/settings.json               # OPTIONAL — pre-registers the Substrait plugin for Claude Code; ignored by the platform
 ```
@@ -62,35 +62,47 @@ docker-compose.yml                  # OPTIONAL — local-dev DB + Flyway runner;
 The platform injects these via the `app-secrets` Kubernetes Secret — read them from the
 environment, never commit them:
 
-- **`DATABASE_URL`** — OceanBase, **MySQL-wire compatible** (`mysql://user:pass@host:2881/db`).
-  Use a **MySQL** driver for your language, never PostgreSQL (no `asyncpg`, no `$1`).
+- **`DATABASE_URL`** — injected **only when the manifest declares a `database:`**. Its
+  scheme follows the engine: `mysql://…` for `oceanbase` (and `mysql`),
+  `postgresql://…` for `postgres`. On OceanBase it is **MySQL-wire compatible**
+  (`mysql://user:pass@host:2881/db`).
+  **On `oceanbase` and `mysql`** use a MySQL driver, never PostgreSQL (no `asyncpg`,
+  no `$1`):
   - **Python (scaffold):** `asyncmy` with `%s` placeholders — see `reference/templates/backend/main.py`.
   - **Node / Rust / etc.:** most drivers (`mysql2`, `sqlx`, …) accept the `mysql://` URL directly.
   - **Go:** `go-sql-driver/mysql` needs the address wrapped in `tcp(...)`; parse the URL and
     rebuild the DSN, or it fails at startup with `default addr for network '…:2881' unknown`.
     Full snippet + a Go backend Dockerfile: `reference/deploy-contract.md` → *Other backend stacks*.
+
+  **On `postgres`** use a Postgres driver — `asyncpg` or `psycopg` in Python, with
+  `$1` placeholders — against the `postgresql://` URL. (The scaffold's `main.py` is
+  written for MySQL wire, so a Postgres app rewrites its data layer accordingly.)
 - **`JWT_SECRET`**
 - **Per declared backing service** (see next section): **`REDIS_URL`**, **`KAFKA_BROKERS`**,
   **`QDRANT_URL`**, **`OBJECT_STORAGE_BUCKET`** — injected **only** when the service is
   declared in `substrait.yaml`.
 
-Whatever the stack, the database is **MySQL**, never Postgres, and all schema lives in
-Flyway migrations (below) — your code only reads and writes rows.
+Whatever the stack, the database is whichever engine the manifest declares — use its
+driver (a **MySQL** driver for `oceanbase`), and keep all schema in Flyway migrations
+(below); your code only reads and writes rows.
 
 ## App manifest (`substrait.yaml`): description & backing services
 
-**`substrait.yaml`** at the repo root is **required** and carries two things: the app's
+**`substrait.yaml`** at the repo root is **required** and carries three things: the app's
 **description** (what it does and who it's for — recorded onto the app at each deploy
 and shown in the portal and the API Library; a missing file, a missing description, or
 the scaffold's untouched placeholder all **fail validation**, so write a real one and
-keep it current) and any **backing services** the app needs — the platform provisions
-those next to the app and injects the connection env var. Installing a client library
-alone does nothing; **the manifest is the only trigger**.
+keep it current), the app's **database** (declared explicitly — see below), and any
+**backing services** the app needs — the platform provisions those next to the app and
+injects the connection env var. Installing a client library alone does nothing;
+**the manifest is the only trigger**.
 
 ```yaml
 description: >
   Tracks team leave requests with an approvals workflow; managers approve or
   reject, and the team calendar shows who's out. For people managers and HR.
+
+database: oceanbase        # explicit — no declaration, no database (see below)
 
 services:
   redis: {}                # cache/queue        → injects REDIS_URL   (redis://redis:6379/0)
@@ -100,9 +112,19 @@ services:
   object-storage: {}       # private file bucket → injects OBJECT_STORAGE_BUCKET
 ```
 
-- Those four are the whole catalog; `persistent` applies only to the three pod services —
-  `object-storage` takes no options. Anything else fails validation with the fix in the
-  message.
+- **`database:` is explicit and separate from `services:`.** The platform provisions
+  the app's database and injects `DATABASE_URL` **only when the manifest declares one**
+  (`oceanbase`, `postgres` or `mysql` — see *Choosing an engine*). An app with no
+  declaration gets no database and no `DATABASE_URL`; shipping Flyway migrations
+  without the declaration fails validation (they'd have nothing to run against).
+  Removing the declaration from a deployed app never deletes its database or severs
+  its connection string — the data is dropped only when the app itself is deleted.
+  **The engine cannot be changed once deployed**: there is no data migration between
+  engines, so a changed `database:` value fails the deploy rather than silently
+  handing the app a different, empty database.
+- Those four are the whole `services:` catalog; `persistent` applies only to the three
+  pod services — `object-storage` takes no options. Anything else fails validation with
+  the fix in the message.
 - **Pod services are ephemeral by default**: a service pod restart wipes its data — treat
   redis as a cache, recreate qdrant collections on startup if missing. Set
   `persistent: true` for a disk that survives restarts and redeploys (kafka log: 10Gi,
@@ -121,6 +143,27 @@ services:
   skill the app was built with, which the platform records on each deploy (it powers
   scaffold-staleness reporting). **Don't write or edit it by hand**: `/substrait:deploy`
   stamps it automatically from the installed skill. Manifests without it stay valid.
+
+### Choosing an engine
+
+| | `oceanbase` | `postgres` / `mysql` |
+|---|---|---|
+| **Where** | Shared, multi-zone HA cluster the platform operates | A **single-node pod with its own 10Gi disk, in your app's namespace** |
+| **Wire protocol** | MySQL (use a MySQL driver) | Native Postgres / MySQL |
+| **Backups** | Nightly platform dumps | **None** — nothing is backed up for you |
+| **Portal tooling** | Database tab: browse, run migrations, repair, reset | Not available (deploys still run migrations normally) |
+| **Best for** | Anything you'd be upset to lose | Apps that need real Postgres/MySQL features, internal tools, prototypes |
+
+Default to **`oceanbase`** — it is the production-grade, backed-up, fully-tooled
+option. Choose `postgres` or `mysql` when the app genuinely needs that engine (e.g.
+Postgres-specific SQL, JSONB, extensions, or an ORM that only speaks Postgres), and
+accept the tradeoff: **one replica, no HA, no platform backups, and no Database-tab
+tooling**. The pod restarts with the node it runs on, and its disk survives redeploys,
+rollbacks and undeclaring the database — but if the data matters, arrange your own
+export.
+
+`mysql` also sidesteps the OceanBase DDL gotchas below — it is real MySQL 8, so the
+lint that rejects those two shapes doesn't apply to it.
 
 ### Object storage (files)
 
@@ -269,8 +312,8 @@ apply if you pick another stack:
 ## Running locally
 
 Local dev is **not** part of the deploy contract, but the scaffold is locally runnable.
-Because production is **OceanBase (MySQL-wire)**, use a local **MySQL/MariaDB** so the
-driver, placeholders and Flyway migrations all run unchanged — **not SQLite** (different
+Run a local database of the **same engine you declared** so the driver, placeholders and
+Flyway migrations all run unchanged (`oceanbase` → a local **MySQL/MariaDB**) — **not SQLite** (different
 driver, placeholders and dialect; the migrations won't apply). The scaffold ships a root
 `docker-compose.yml` (a `db` + one-shot `migrate` service); for the FastAPI/Vite default:
 
@@ -292,8 +335,11 @@ and point `DATABASE_URL` at it. See `reference/local-dev.md` for the full guide.
    API under **`/api`**. Ship a `cicd/Dockerfile.backend` that builds it and `EXPOSE`s 8000.
 3. (Optional) Build a frontend in `frontend/` calling the API via relative `/api` paths, and
    ship a `cicd/Dockerfile.frontend` that serves it on **port 80**.
-4. Put every schema change in a new `backend/resources/db/migration/V*.sql` (MySQL dialect,
-   minding the OceanBase DDL gotchas in `reference/deploy-contract.md`).
+4. Using a database? Declare it in `substrait.yaml` (`database: oceanbase` unless the
+   app needs real Postgres/MySQL — see *Choosing an engine*) and put every schema
+   change in a new `backend/resources/db/migration/V*.sql`, in that engine's dialect
+   (on OceanBase, mind the DDL gotchas in `reference/deploy-contract.md`). No
+   database? Omit the key and ship no migration files.
 5. List any custom config the app reads from env in `backend/.env.example` (mark secrets `# secret`).
 6. Do **not** create `k8s/` — the platform generates only that, and the slug.
 7. Record the deploy contract in the project's memory file: copy

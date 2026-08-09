@@ -1,4 +1,4 @@
-<!-- BEGIN substrait-app contract (v4) — managed by the substrait plugin (link/deploy); edits inside this block are overwritten on update. Delete the whole block to opt out. -->
+<!-- BEGIN substrait-app contract (v6) — managed by the substrait plugin (link/deploy); edits inside this block are overwritten on update. Delete the whole block to opt out. -->
 ## Substrait deployment
 
 **Linked app:** __SUBSTRAIT_APP_LINK__
@@ -17,10 +17,15 @@ uploads, `--watch` follows the build to the live preview); re-link with
   `/api` → backend, everything else → frontend (no `frontend/` → everything → backend,
   so serve `/` yourself). The frontend calls the API via **relative `/api` paths** —
   never an absolute URL, never `VITE_API_URL`.
-- Database is **always OceanBase (MySQL wire)** — MySQL driver only, never Postgres.
-  The platform injects `DATABASE_URL` and `JWT_SECRET`. **All DDL lives in
-  Flyway files** `backend/resources/db/migration/V*.sql` (MySQL dialect) — the app
-  never `CREATE TABLE`s.
+- Database is **explicit**: declare `database:` in `substrait.yaml` and the platform
+  provisions it and injects `DATABASE_URL`; no declaration → no database, no
+  `DATABASE_URL` (`JWT_SECRET` is always injected). Engines: `oceanbase` (default —
+  shared HA cluster, MySQL wire, backed up, portal Database tab) or `postgres` /
+  `mysql` (the app's own single-node pod + disk: real engine, but no HA, no backups,
+  no Database-tab tooling). The engine can't change after the first deploy. **All DDL
+  lives in Flyway files** `backend/resources/db/migration/V*.sql` in that engine's
+  dialect — the app never `CREATE TABLE`s, and migrations without a `database:`
+  declaration fail validation.
 - Backing services (redis / kafka / qdrant / object-storage): declare them in a
   **`substrait.yaml`** at the repo root (`services: {redis: {}, kafka: {persistent: true},
   qdrant: {}, object-storage: {}}`) — the platform provisions them and injects
