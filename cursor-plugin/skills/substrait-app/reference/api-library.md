@@ -30,12 +30,13 @@ rather than printing it. For app entries, `spec app SLUG` serves the doc the pla
 harvested from the running app — use it instead of fetching the app's public
 `/openapi.json`, which is gated behind Google SSO for SSO-enabled apps.
 
-Note the catalogue is **scoped to the account's seat tier**: some orgs restrict
-sensitive internal entries to certain tiers, and out-of-tier entries are simply
-absent — lists omit them and a direct `show`/`spec` answers 404, exactly like a
-slug that never existed. If the user names an API you cannot see, say the library
-doesn't list it for this account and suggest they check with their org admin —
-don't retry or treat it as an outage.
+Note the catalogue is **scoped by the org's data groups**: orgs can restrict
+sensitive operations (endpoint + method) to members who hold the covering group,
+and operations you don't hold are simply absent — lists omit them, counts shrink,
+served specs drop them, and an entry whose whole inventory is grouped away answers
+404 on `show`/`spec`, exactly like a slug that never existed. If the user names an
+API or endpoint you cannot see, say the library doesn't list it for this account
+and suggest they check with their org admin — don't retry or treat it as an outage.
 
 ## The design-time contract
 
