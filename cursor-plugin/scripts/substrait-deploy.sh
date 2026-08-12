@@ -192,6 +192,18 @@ if substrait_call GET /api/deploy/app && [ "${SUBSTRAIT_STATUS:-}" = "200" ]; th
   CONN_BRANCH="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field connected_branch)" || CONN_BRANCH=""
 fi
 
+# Honor the project's recorded mode choice (deploy_mode in .substrait/config.json,
+# written by `substrait-link.sh set-mode`). Unset = the server state decides, exactly
+# as before the choice existed. A mismatch means the config was hand-edited or the
+# app's connection changed elsewhere — refuse with the fix rather than guessing.
+CHOSEN="$(_json_get "$SUBSTRAIT_CONFIG_FILE" deploy_mode 2>/dev/null)" || CHOSEN=""
+if [ "$CHOSEN" = "connect" ] && [ "$MODE" != "connect" ]; then
+  die "this project chose GitHub deploys but the app isn't connected to a repo — run /substrait:link and 'set-mode --mode connect --repo <owner/repo>' to connect it, or 'set-mode --mode upload' to go back to zip deploys."
+fi
+if [ "$CHOSEN" = "upload" ] && [ "$MODE" = "connect" ]; then
+  die "this project chose zip deploys but the app deploys from $CONN_REPO — run /substrait:link and 'set-mode --mode upload' to disconnect it, or 'set-mode --mode connect' to record GitHub deploys."
+fi
+
 if [ "$MODE" = "connect" ]; then
   # ── Connected app: trigger a pull of the pushed branch. ──────────────────────
   # The gates below exist so the tree the server builds is EXACTLY the tree the

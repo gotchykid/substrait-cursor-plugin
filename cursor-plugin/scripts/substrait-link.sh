@@ -14,6 +14,13 @@
 #   use    --app SLUG                       bind this project to an existing app
 #   create --name NAME                      create a new empty app and bind to it
 #
+# Deploy-mode choice (mode 2 = zip upload, mode 3 = GitHub):
+#   modes                                   app state + tenant toggles + recorded choice
+#   repos                                   GitHub repos reachable via the App installs
+#   set-mode --mode upload|connect [--repo OWNER/REPO] [--branch BR]
+#                                           switch the app's deploy path and record it
+#                                           in .substrait/config.json (deploy_mode)
+#
 # Per-app deploy token (sbd_ — the original flow, still supported; the project token
 # wins over the account token when both exist):
 #   login  [--portal-url URL]               browser flow: pick the app while logged in,
@@ -42,7 +49,9 @@ _PORTAL_REQUIRED_MSG="a portal URL is required — pass --portal-url <your Subst
 # _write_config PORTAL TOKEN [SLUG] [HOST] — write .substrait/config.json (0600) and
 # make sure .substrait/ is gitignored. SLUG/HOST are cached for friendlier messages.
 _write_config() {
-  local portal="$1" token="$2" slug="${3:-}" host="${4:-}"
+  local portal="$1" token="$2" slug="${3:-}" host="${4:-}" mode
+  # Preserve a recorded deploy-mode choice across rewrites (set-mode wrote it).
+  mode="$(_json_get "$SUBSTRAIT_CONFIG_FILE" deploy_mode 2>/dev/null)" || mode=""
   mkdir -p .substrait
   umask 177
   # Build the JSON by hand (no python): these are values we control — a portal URL, an
@@ -50,6 +59,7 @@ _write_config() {
   { printf '{\n  "portal_url": "%s",\n  "token": "%s"' "${portal%/}" "$token"
     [ -n "$slug" ] && printf ',\n  "slug": "%s"' "$slug"
     [ -n "$host" ] && printf ',\n  "host": "%s"' "$host"
+    [ -n "$mode" ] && printf ',\n  "deploy_mode": "%s"' "$mode"
     printf '\n}\n'
   } > "$SUBSTRAIT_CONFIG_FILE"
   chmod 600 "$SUBSTRAIT_CONFIG_FILE"
@@ -75,11 +85,15 @@ _write_global_config() {
 # account token authenticates; the slug names the app via X-Substrait-App). Ensures
 # .substrait/ is gitignored like _write_config.
 _write_project_ref() {
-  local slug="$1" host="${2:-}"
+  local slug="$1" host="${2:-}" mode
+  # Preserve a recorded deploy-mode choice across rewrites (_bind_project calls this
+  # twice — slug-only, then again with the discovered host).
+  mode="$(_json_get "$SUBSTRAIT_CONFIG_FILE" deploy_mode 2>/dev/null)" || mode=""
   mkdir -p .substrait
   umask 177
   { printf '{\n  "slug": "%s"' "$slug"
     [ -n "$host" ] && printf ',\n  "host": "%s"' "$host"
+    [ -n "$mode" ] && printf ',\n  "deploy_mode": "%s"' "$mode"
     printf '\n}\n'
   } > "$SUBSTRAIT_CONFIG_FILE"
   chmod 600 "$SUBSTRAIT_CONFIG_FILE"
@@ -88,6 +102,26 @@ _write_project_ref() {
   elif [ ! -f .gitignore ]; then
     printf '# Substrait CLI link state\n.substrait/\n' > .gitignore
   fi
+}
+
+# _write_deploy_mode MODE — record the project's chosen deploy path (upload|connect)
+# in the project config, preserving every other key. `/substrait:deploy` honors it.
+_write_deploy_mode() {
+  local mode="$1" portal token slug host
+  portal="$(_json_get "$SUBSTRAIT_CONFIG_FILE" portal_url 2>/dev/null)" || portal=""
+  token="$(_json_get "$SUBSTRAIT_CONFIG_FILE" token 2>/dev/null)" || token=""
+  slug="$(_json_get "$SUBSTRAIT_CONFIG_FILE" slug 2>/dev/null)" || slug=""
+  host="$(_json_get "$SUBSTRAIT_CONFIG_FILE" host 2>/dev/null)" || host=""
+  mkdir -p .substrait
+  umask 177
+  { printf '{\n  "deploy_mode": "%s"' "$mode"
+    [ -n "$portal" ] && printf ',\n  "portal_url": "%s"' "$portal"
+    [ -n "$token" ] && printf ',\n  "token": "%s"' "$token"
+    [ -n "$slug" ] && printf ',\n  "slug": "%s"' "$slug"
+    [ -n "$host" ] && printf ',\n  "host": "%s"' "$host"
+    printf '\n}\n'
+  } > "$SUBSTRAIT_CONFIG_FILE"
+  chmod 600 "$SUBSTRAIT_CONFIG_FILE"
 }
 
 # _account_token — the effective PERSONAL token (env or global config), if any.
@@ -255,12 +289,32 @@ cmd_whoami() {
   fi
   email="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field email)"
   echo "Authenticated to $portal as ${email:-your account} (personal token ${token:0:12}…)."
+  if _upload_mode_disabled; then
+    echo "Note: this workspace has creating new apps from Claude Code disabled" \
+         "— existing linked apps still deploy."
+  fi
+}
+
+# True (exit 0) when the /api/auth/me body currently in SUBSTRAIT_BODY says the active
+# workspace has upload mode ("Coding on Claude Code") disabled — a per-tenant toggle
+# that refuses NEW app creation from the CLI. The `upload` key only occurs inside
+# `org.modes`, and _json_field can't extract booleans, hence the direct grep.
+_upload_mode_disabled() {
+  printf '%s' "$SUBSTRAIT_BODY" | grep -q '"upload"[[:space:]]*:[[:space:]]*false'
 }
 
 # ── Project binding on top of an account link (slug only, no secret) ────────────
 
 cmd_apps() {
   local token; token="$(_account_token)" || die "no account link on this machine — run /substrait:login to authorize your account first."
+  # Mode awareness for the pick-or-create step (stderr, so stdout stays pure
+  # slug<TAB>name rows). Checked BEFORE the projects call — both share SUBSTRAIT_BODY.
+  # Fail-open: an unreachable /auth/me must not break the listing.
+  if SUBSTRAIT_TOKEN="$token" substrait_call GET /api/auth/me 2>/dev/null \
+     && [ "${SUBSTRAIT_STATUS:-}" = "200" ] && _upload_mode_disabled; then
+    echo "note: this workspace has new-app creation from Claude Code disabled —" \
+         "link an existing app; 'create' will be refused." >&2
+  fi
   SUBSTRAIT_TOKEN="$token" substrait_call GET /api/projects || exit $?
   [ "${SUBSTRAIT_STATUS:-}" = "200" ] || die "could not list apps (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
   # One object per line, then slug + display name per row (field order is
@@ -318,10 +372,148 @@ cmd_create() {
   local esc; esc="$(printf '%s' "$name" | sed 's/\\/\\\\/g; s/"/\\"/g')"
   SUBSTRAIT_TOKEN="$token" substrait_call POST /api/projects/create \
     -H "Content-Type: application/json" --data "{\"display_name\":\"$esc\"}" || exit $?
-  [ "${SUBSTRAIT_STATUS:-}" = "201" ] || die "could not create app (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
+  if [ "${SUBSTRAIT_STATUS:-}" != "201" ]; then
+    # 403 = creation refused by policy (workspace mode toggle, quota, or missing
+    # permission) — the backend's `detail` is user-facing prose worth relaying as-is.
+    local detail=""
+    [ "${SUBSTRAIT_STATUS:-}" = "403" ] && detail="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field detail)"
+    [ -n "$detail" ] && die "could not create app: $detail"
+    die "could not create app (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
+  fi
   local slug; slug="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field slug)" || die "bad create response"
   echo "Created app '$name' ($slug)."
   _bind_project "$slug" "$token"
+}
+
+# ── Deploy-mode choice (upload = zip, connect = GitHub) ─────────────────────────
+
+cmd_modes() {
+  # State the agent reads before offering the mode choice in /substrait:deploy.
+  # Works with either credential: /api/deploy/app now carries org_modes.
+  substrait_call GET /api/deploy/app || exit $?
+  [ "${SUBSTRAIT_STATUS:-}" = "200" ] || die "could not read the linked app (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
+  local mode chosen
+  mode="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field mode)" || mode=""
+  [ "$mode" = "connect" ] || mode="upload"
+  echo "app_mode: $mode"
+  # org_modes booleans — grep, since _json_field only extracts strings/numbers; the
+  # `upload`/`connect` keys occur only inside org_modes with boolean values.
+  if printf '%s' "$SUBSTRAIT_BODY" | grep -q '"upload"[[:space:]]*:[[:space:]]*false'; then
+    echo "tenant_upload: disabled"
+  else
+    echo "tenant_upload: enabled"
+  fi
+  if printf '%s' "$SUBSTRAIT_BODY" | grep -q '"connect"[[:space:]]*:[[:space:]]*false'; then
+    echo "tenant_connect: disabled"
+  else
+    echo "tenant_connect: enabled"
+  fi
+  chosen="$(_json_get "$SUBSTRAIT_CONFIG_FILE" deploy_mode)" || chosen=""
+  echo "chosen: ${chosen:-unset}"
+  # Local git state, for the GitHub-path setup assist (deploy.md step 1b): connect
+  # mode needs an initialized repo with an origin remote and a pushed branch.
+  # symbolic-ref (not rev-parse) so a freshly `git init`ed repo with no commits
+  # still reports its unborn branch instead of erroring.
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "git_repo: yes"
+    echo "git_branch: $(git symbolic-ref --short -q HEAD || echo unknown)"
+    echo "git_remote: $(git remote get-url origin 2>/dev/null || echo none)"
+  else
+    echo "git_repo: no"
+  fi
+}
+
+cmd_repos() {
+  # GitHub repos reachable through the caller's App installations, for the mode-3
+  # switch: full_name<TAB>default_branch<TAB>installation_id per row.
+  local token; token="$(_account_token)" || die "listing GitHub repos needs an account link — run /substrait:login first."
+  SUBSTRAIT_TOKEN="$token" substrait_call GET /api/github/repos || exit $?
+  [ "${SUBSTRAIT_STATUS:-}" = "200" ] || die "could not list GitHub repos (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
+  local rows
+  rows="$(printf '%s' "$SUBSTRAIT_BODY" | sed 's/},[[:space:]]*{/}\
+{/g' | awk '
+    {
+      fn=""; db=""; inst=""
+      if (match($0, /"full_name"[[:space:]]*:[[:space:]]*"[^"]*"/)) {
+        s=substr($0,RSTART,RLENGTH); sub(/^"full_name"[[:space:]]*:[[:space:]]*"/,"",s); sub(/"$/,"",s); fn=s }
+      if (match($0, /"default_branch"[[:space:]]*:[[:space:]]*"[^"]*"/)) {
+        s=substr($0,RSTART,RLENGTH); sub(/^"default_branch"[[:space:]]*:[[:space:]]*"/,"",s); sub(/"$/,"",s); db=s }
+      if (match($0, /"installation_id"[[:space:]]*:[[:space:]]*[0-9]+/)) {
+        s=substr($0,RSTART,RLENGTH); sub(/^"installation_id"[[:space:]]*:[[:space:]]*/,"",s); inst=s }
+      if (fn != "") printf "%s\t%s\t%s\n", fn, db, inst
+    }')"
+  if [ -z "$rows" ]; then
+    # No installations (or none with repos): surface the browser install step.
+    local url=""
+    if SUBSTRAIT_TOKEN="$token" substrait_call GET /api/github/connect \
+       && [ "${SUBSTRAIT_STATUS:-}" = "200" ]; then
+      url="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field url)" || url=""
+    fi
+    echo "No GitHub repos available — install the Substrait GitHub App on the repo first${url:+ ($url)}, then re-run this." >&2
+    exit 1
+  fi
+  printf '%s\n' "$rows"
+}
+
+cmd_set_mode() {
+  local mode="" repo="" branch=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --mode) mode="$2"; shift 2 ;;
+      --repo) repo="$2"; shift 2 ;;
+      --branch) branch="$2"; shift 2 ;;
+      *) die "unknown arg: $1" ;;
+    esac
+  done
+  case "$mode" in upload|connect) : ;; *) die "--mode must be 'upload' or 'connect'" ;; esac
+  local slug; slug="$(substrait_app_slug)" || die "this project isn't linked to an app yet — run /substrait:link first."
+  # Connection management runs on /api/projects/* — account (sbt_) credential only.
+  local token; token="$(_account_token)" || die "switching deploy modes needs the account link (personal sbt_ token) — run /substrait:login. App-scoped sbd_ deploy tokens can't manage connections."
+  SUBSTRAIT_TOKEN="$token" substrait_call GET /api/deploy/app || exit $?
+  [ "${SUBSTRAIT_STATUS:-}" = "200" ] || die "could not read the linked app (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
+  local app_id cur_mode
+  app_id="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field id)" || die "bad app response"
+  cur_mode="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field mode)" || cur_mode=""
+  [ "$cur_mode" = "connect" ] || cur_mode="upload"
+
+  if [ "$mode" = "$cur_mode" ]; then
+    _write_deploy_mode "$mode"
+    echo "Deploy mode recorded: $mode (already the app's state)."
+    return 0
+  fi
+
+  local detail
+  if [ "$mode" = "connect" ]; then
+    [ -n "$repo" ] || die "--repo OWNER/REPO is required to switch to GitHub deploys (run 'repos' for the list)"
+    # Resolve installation + default branch from the account's repo list.
+    local row inst def_branch
+    row="$(cmd_repos | awk -F'\t' -v r="$repo" '$1 == r {print; exit}')" || true
+    [ -n "$row" ] || die "repo '$repo' isn't reachable through your GitHub App installations — run 'repos' for the list (or install the app on that repo first)."
+    def_branch="$(printf '%s' "$row" | cut -f2)"
+    inst="$(printf '%s' "$row" | cut -f3)"
+    [ -n "$branch" ] || branch="$def_branch"
+    SUBSTRAIT_TOKEN="$token" substrait_call POST "/api/projects/$app_id/connection" \
+      -H "Content-Type: application/json" \
+      --data "{\"installation_id\":$inst,\"repo_full_name\":\"$repo\",\"branch\":\"$branch\"}" || exit $?
+    if [ "${SUBSTRAIT_STATUS:-}" != "201" ]; then
+      # 403 = tenant toggle off; 409 = already connected; 422 = repo/installation
+      # mismatch — the backend detail is user-facing prose, relay it.
+      detail="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field detail)" || detail=""
+      [ -n "$detail" ] && die "could not connect the app: $detail"
+      die "could not connect the app (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
+    fi
+    _write_deploy_mode connect
+    echo "Switched '$slug' to GitHub deploys from $repo@$branch. Push the code to that repo — /substrait:deploy then triggers a pull of the pushed branch."
+  else
+    SUBSTRAIT_TOKEN="$token" substrait_call DELETE "/api/projects/$app_id/connection" || exit $?
+    if [ "${SUBSTRAIT_STATUS:-}" != "200" ]; then
+      detail="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field detail)" || detail=""
+      [ -n "$detail" ] && die "could not disconnect the app: $detail"
+      die "could not disconnect the app (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
+    fi
+    _write_deploy_mode upload
+    echo "Switched '$slug' back to zip deploys — /substrait:deploy now uploads the working tree."
+  fi
 }
 
 cmd_save() {
@@ -387,8 +579,11 @@ case "${1:-status}" in
   apps)         shift; cmd_apps "$@" ;;
   use)          shift; cmd_use "$@" ;;
   create)       shift; cmd_create "$@" ;;
+  modes)        shift; cmd_modes "$@" ;;
+  repos)        shift; cmd_repos "$@" ;;
+  set-mode)     shift; cmd_set_mode "$@" ;;
   login)  shift; cmd_login "$@" ;;
   save)   shift; cmd_save "$@" ;;
   status) shift || true; cmd_status ;;
-  *) die "unknown command: ${1}. Use account|save-account|whoami|apps|use|create|login|save|status." ;;
+  *) die "unknown command: ${1}. Use account|save-account|whoami|apps|use|create|modes|repos|set-mode|login|save|status." ;;
 esac

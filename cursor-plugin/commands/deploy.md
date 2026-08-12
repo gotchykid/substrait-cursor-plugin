@@ -23,6 +23,55 @@ maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `C
    project's bound app slug) or by an app-scoped deploy token saved in the project —
    linking sets up whichever the user chose.
 
+1b. **Offer the deploy-path choice (once).** Run
+   `bash <plugin>/scripts/substrait-link.sh modes` — it prints `app_mode` (the app's
+   current path), `tenant_upload`/`tenant_connect` (what this workspace allows) and
+   `chosen` (the recorded choice in `.substrait/config.json`).
+   - If `chosen` is set, or the app is already connected (`app_mode: connect`), just
+     proceed — the choice is made. To change it later the user runs
+     `bash <plugin>/scripts/substrait-link.sh set-mode`.
+   - Otherwise, if `tenant_connect: enabled`, ask the user once: deploy this app by
+     **zip upload** (simplest — ships the working tree) or **connect it to a GitHub
+     repo** (deploys build the pushed branch; sha-verified)?
+     - GitHub: walk the one-time setup in order — `modes` also prints the local git
+       state (`git_repo`, `git_branch`, `git_remote`) so you know which steps apply:
+       1. **No git repo yet** (`git_repo: no`)? Offer to initialize it:
+          `git init -b main`, then `git add -A && git commit -m "Initial commit"`.
+          (`.substrait/` is already gitignored by the link step — keep it that way.)
+       2. **The `gh` CLI makes the rest one-command** (optional — the browser path
+          below works without it). Check `command -v gh`:
+          - Not installed? Offer to install it with the platform's package manager
+            (`brew install gh` on macOS, `winget install --id GitHub.CLI` on Windows,
+            the distro package or GitHub's official apt/dnf repo on Linux) — with the
+            user's go-ahead, run the install yourself and verify with `gh --version`.
+          - Installed but not logged in? Check `gh auth status`; if it reports no
+            authentication, have the **user** run `gh auth login` in a terminal —
+            it's interactive (browser device-code flow), so don't run it yourself
+            and wait for it. Re-check `gh auth status` after.
+       3. **Pick the GitHub repo:** `bash <plugin>/scripts/substrait-link.sh repos`
+          lists the repos reachable through the user's Substrait GitHub App
+          installations (rows: `repo<TAB>default branch<TAB>install id`). If the repo
+          they want isn't listed — or doesn't exist on GitHub yet — help them create
+          it: with `gh` authenticated,
+          `gh repo create <owner>/<name> --private --source=. --push` creates the
+          repo, adds `origin` and pushes in one go; without `gh` they create it in
+          the browser. Then have them install the Substrait GitHub App on it (relay
+          the install URL `repos` prints when empty; existing installations are
+          extended from GitHub's app settings page) and re-run `repos` until the
+          repo appears.
+       4. **No `origin` remote** (`git_remote: none`)? Add it and push:
+          `git remote add origin <the repo's SSH or HTTPS URL>` then
+          `git push -u origin <branch>`. If the push fails on authentication, go back
+          to the `gh auth login` step (or their SSH key) — never guess or embed
+          credentials.
+       5. **Connect:** `bash <plugin>/scripts/substrait-link.sh set-mode --mode connect --repo <owner/repo> --branch <the branch you pushed>`.
+     - Zip: `bash <plugin>/scripts/substrait-link.sh set-mode --mode upload` (records
+       the choice).
+   - If `tenant_connect: disabled`, don't offer GitHub — proceed with the zip path.
+   - A `set-mode` refusal (403 prose — the workspace disallows that mode) is relayed
+     verbatim, never retried. Mode switching needs the account link; app-scoped
+     deploy tokens can't do it (the script says so).
+
 2. **Author the app's OpenAPI spec** — write **`openapi.json` at the project root**
    (next to `backend/` and `substrait.yaml` — commit it, it's part of the code): a
    complete OpenAPI 3.x document you author by studying the backend source. It ships

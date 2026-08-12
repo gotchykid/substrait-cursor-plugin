@@ -48,9 +48,14 @@ machine/project is already linked, skip straight to binding.
 3. **Bind this project to an app.** With the account link in place:
    - List the user's apps: `bash <plugin>/scripts/substrait-link.sh apps`
      (prints `slug<TAB>display name` lines). Show them to the user and ask which app this
-     project should deploy to — or whether to create a new one.
+     project should deploy to — or whether to create a new one. **Mode awareness:** some
+     workspaces have new-app creation from the editor disabled (a per-tenant setting);
+     `apps` prints a note on stderr when that's the case — then offer only existing apps
+     and relay the note instead of attempting `create`.
    - Existing app: `bash <plugin>/scripts/substrait-link.sh use --app <SLUG>`
-   - New app:      `bash <plugin>/scripts/substrait-link.sh create --name "<NAME>"`
+   - New app:      `bash <plugin>/scripts/substrait-link.sh create --name "<NAME>"` —
+     refused with the reason when the workspace disallows it (or the app quota is full);
+     relay that message verbatim, don't retry.
 
 4. **Per-app token fallback.** If the user prefers a token scoped to one app (shared
    machines, CI secrets):
@@ -63,6 +68,12 @@ machine/project is already linked, skip straight to binding.
 
 5. **Confirm** the linked app + preview URL, and remind the user they can now run
    `/substrait:deploy` to ship the current code.
+
+Related: how the app *deploys* (zip upload vs GitHub trigger) is a separate, switchable
+choice — `bash <plugin>/scripts/substrait-link.sh modes` shows the current state and
+`bash <plugin>/scripts/substrait-link.sh set-mode --mode upload|connect [--repo <owner/repo>]`
+switches it (offered automatically during `/substrait:deploy`; GitHub is only offered
+where the workspace has Connect to GitHub enabled).
 
 Note: on a successful link, the script also records a **"Substrait deployment" section
 in the project's `AGENTS.md`** (creating the file if needed; that's why the
