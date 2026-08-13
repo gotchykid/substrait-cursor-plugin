@@ -161,6 +161,7 @@ stamp_scaffold_version() {
   else
     printf '\n# Skill/plugin version this app was last deployed with — stamped by\n# /substrait:deploy; do not edit by hand.\nscaffold_version: %s\n' "$ver" >> substrait.yaml
   fi
+  STAMP_CHANGED=1
   echo "Stamped scaffold_version $ver into substrait.yaml."
 }
 stamp_scaffold_version
@@ -213,8 +214,13 @@ if [ "$MODE" = "connect" ]; then
   [ -n "$STACK" ] && echo "Note: --stack is ignored for connected apps — the platform detects the stack from the repo." >&2
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     || die "this app deploys from GitHub ($CONN_REPO@$CONN_BRANCH) but this directory isn't a git checkout — clone that repo and run /substrait:deploy from it."
-  [ -z "$(git status --porcelain 2>/dev/null)" ] \
-    || die "uncommitted changes — Substrait builds the PUSHED branch, so anything uncommitted (openapi.json and substrait.yaml included) won't ship. Commit and push, then re-run /substrait:deploy."
+  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    stamp_note=""
+    # Name the self-inflicted case: on a first deploy (or after a skill update) the
+    # stamp above is what dirtied the tree — the fix is mechanical, say so.
+    [ -n "${STAMP_CHANGED:-}" ] && stamp_note=" (this includes the scaffold_version stamp this script just wrote into substrait.yaml — that stamp itself must be committed)"
+    die "uncommitted changes${stamp_note} — Substrait builds the PUSHED branch, so anything uncommitted (openapi.json and substrait.yaml included) won't ship. Commit and push, then re-run /substrait:deploy."
+  fi
   cur_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
   [ "$cur_branch" = "$CONN_BRANCH" ] \
     || die "this app deploys from branch '$CONN_BRANCH' but you're on '$cur_branch' — switch to (or merge into) '$CONN_BRANCH' first."

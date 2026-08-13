@@ -113,15 +113,26 @@ maintain a project-memory block and Cursor reads `AGENTS.md`, not the default `C
    just the `description:` key if the app declares no backing services — but if the
    app already uses redis/kafka/qdrant, keep them declared under `services:`.
 
-3. **Commit and push first if the app is GitHub-connected.** For a connected app the
-   deploy builds the **pushed branch**, not your working tree — so after writing or
-   regenerating `openapi.json` / `substrait.yaml`, commit everything and push to the
-   connected branch before deploying. The script refuses to trigger from a dirty tree,
-   the wrong branch, or an unpushed HEAD, and the server independently verifies the
-   commit SHA — if it reports a mismatch, push (or pull a teammate's newer commits) and
-   re-run. Do not try to work around these gates; they exist so the platform never
-   builds code you didn't validate. (Zip-deployed apps skip this step — the zip carries
-   the working tree directly.)
+3. **Get the branch deploy-ready if the app is GitHub-connected: offer to commit and
+   push.** A connected app's deploy builds the **pushed branch**, not the working
+   tree — so before running the deploy script, check the local git state
+   (`git status --porcelain`; compare HEAD against the pushed tip of the connected
+   branch). If anything is uncommitted or unpushed, don't just report it — **offer to
+   handle it**: summarize what would ship, propose a short commit message, and with
+   the user's go-ahead run `git add -A && git commit -m "<message>" && git push`.
+   Never commit or push silently, with one exception: the deploy script stamps
+   `scaffold_version` into `substrait.yaml` during preflight (it prints "Stamped
+   scaffold_version …") — when a run refuses for uncommitted changes right after
+   that stamp, commit and push the stamp (and only the stamp, unless the user already
+   agreed to more) and re-run without asking; it's mechanical. If the user declines
+   the offer, explain the deploy will build the currently pushed tip without their
+   local changes, and let them decide whether to proceed.
+   The script refuses to trigger from a dirty tree, the wrong branch, or an unpushed
+   HEAD, and the server independently verifies the commit SHA — if it reports a
+   mismatch, push (or pull a teammate's newer commits) and re-run. Do not try to work
+   around these gates; they exist so the platform never builds code the user didn't
+   explicitly ship. (Zip-deployed apps skip this step — the zip carries the working
+   tree directly.)
 
 4. **Deploy** from the project root:
    `bash <plugin>/scripts/substrait-deploy.sh --watch`
