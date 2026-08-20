@@ -49,3 +49,6 @@ commands read it from config — the URL is only needed here at login.)
    to bind a project to an app, `/substrait:library` to browse the API catalog,
    `/substrait:deploy` to ship. This command does **not** bind the current project to
    any app — that's `/substrait:link`.
+
+To sign the machine out again — revoking the token on the portal, not just deleting the
+local file — use `/substrait:logout`.

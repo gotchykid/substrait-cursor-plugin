@@ -48,14 +48,22 @@ machine/project is already linked, skip straight to binding.
 3. **Bind this project to an app.** With the account link in place:
    - List the user's apps: `bash <plugin>/scripts/substrait-link.sh apps`
      (prints `slug<TAB>display name` lines). Show them to the user and ask which app this
-     project should deploy to — or whether to create a new one. **Mode awareness:** some
-     workspaces have new-app creation from the editor disabled (a per-tenant setting);
-     `apps` prints a note on stderr when that's the case — then offer only existing apps
-     and relay the note instead of attempting `create`.
+     project should deploy to — or whether to create a new one. **Mode awareness:** `apps`
+     prints a note on stderr when the workspace's per-tenant toggles constrain creation —
+     either "GitHub only" (a new app needs a repo, see below) or creation disabled
+     entirely (then offer only existing apps and relay the note).
    - Existing app: `bash <plugin>/scripts/substrait-link.sh use --app <SLUG>`
    - New app:      `bash <plugin>/scripts/substrait-link.sh create --name "<NAME>"` —
      refused with the reason when the workspace disallows it (or the app quota is full);
      relay that message verbatim, don't retry.
+   - New app in a **GitHub-only workspace** (zip uploads switched off):
+     `bash <plugin>/scripts/substrait-link.sh create --name "<NAME>" --repo <owner/repo>
+     [--branch <BR>]` — the app is created already connected to that repo and records
+     `deploy_mode: connect`. `bash <plugin>/scripts/substrait-link.sh repos` lists the
+     repos the Substrait GitHub App can reach (empty ⇒ the user installs the App on the
+     repo first, via the URL it prints). The code must live in that repo: offer
+     `git init` / `gh repo create` / push help when it doesn't yet. A bare `create` here
+     fails with exactly this guidance — retry it with `--repo`, don't loop.
 
 4. **Per-app token fallback.** If the user prefers a token scoped to one app (shared
    machines, CI secrets):

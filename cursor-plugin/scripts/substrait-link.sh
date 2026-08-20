@@ -9,10 +9,18 @@
 #                                           on the portal's Access tokens page
 #   whoami                                  verify the account link against the portal
 #                                           and print who it authenticates
+#   logout [--project] [--revoke|--keep-token]
+#                                           undo `account`: revoke the personal token on
+#                                           the portal (when this flow minted it) and
+#                                           delete ~/.substrait/config.json; --project
+#                                           also unbinds this project
 # Project (with an account link in place — no per-project secret):
 #   apps                                    list your apps (slug + name), to pick from
 #   use    --app SLUG                       bind this project to an existing app
-#   create --name NAME                      create a new empty app and bind to it
+#   create --name NAME [--repo OWNER/REPO] [--branch BR]
+#                                           create a new empty app and bind to it; --repo
+#                                           makes it GitHub-connected from birth (required
+#                                           where the workspace has zip uploads disabled)
 #
 # Deploy-mode choice (mode 2 = zip upload, mode 3 = GitHub):
 #   modes                                   app state + tenant toggles + recorded choice
@@ -81,14 +89,21 @@ _write_global_config() {
   chmod 600 "$SUBSTRAIT_GLOBAL_CONFIG"
 }
 
-# _write_project_ref SLUG [HOST] — bind this project to an app WITHOUT a secret (the
-# account token authenticates; the slug names the app via X-Substrait-App). Ensures
-# .substrait/ is gitignored like _write_config.
+# _write_project_ref SLUG [HOST] [reset] — bind this project to an app WITHOUT a secret
+# (the account token authenticates; the slug names the app via X-Substrait-App). Ensures
+# .substrait/ is gitignored like _write_config. A third arg DROPS any recorded
+# deploy_mode instead of preserving it.
 _write_project_ref() {
-  local slug="$1" host="${2:-}" mode
+  local slug="$1" host="${2:-}" reset="${3:-}" mode
   # Preserve a recorded deploy-mode choice across rewrites (_bind_project calls this
-  # twice — slug-only, then again with the discovered host).
-  mode="$(_json_get "$SUBSTRAIT_CONFIG_FILE" deploy_mode 2>/dev/null)" || mode=""
+  # twice — slug-only, then again with the discovered host) — unless resetting, which is
+  # what binding to an app does: a choice recorded for the PREVIOUS app says nothing
+  # about this one, and a stale value makes substrait-deploy.sh refuse.
+  if [ -n "$reset" ]; then
+    mode=""
+  else
+    mode="$(_json_get "$SUBSTRAIT_CONFIG_FILE" deploy_mode 2>/dev/null)" || mode=""
+  fi
   mkdir -p .substrait
   umask 177
   { printf '{\n  "slug": "%s"' "$slug"
@@ -290,17 +305,168 @@ cmd_whoami() {
   email="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field email)"
   echo "Authenticated to $portal as ${email:-your account} (personal token ${token:0:12}…)."
   if _upload_mode_disabled; then
-    echo "Note: this workspace has creating new apps from Claude Code disabled" \
-         "— existing linked apps still deploy."
+    if _connect_mode_disabled; then
+      echo "Note: this workspace has creating new apps from Claude Code disabled" \
+           "— existing linked apps still deploy."
+    else
+      echo "Note: this workspace deploys from GitHub only — new apps must be created" \
+           "against a repo ('create --name NAME --repo OWNER/REPO')."
+    fi
   fi
 }
 
-# True (exit 0) when the /api/auth/me body currently in SUBSTRAIT_BODY says the active
-# workspace has upload mode ("Coding on Claude Code") disabled — a per-tenant toggle
-# that refuses NEW app creation from the CLI. The `upload` key only occurs inside
-# `org.modes`, and _json_field can't extract booleans, hence the direct grep.
+# True (exit 0) when the /api/auth/me (or /api/deploy/app) body currently in
+# SUBSTRAIT_BODY says the active workspace has that deployment mode disabled — the
+# per-tenant toggles that gate NEW app creation. The `upload`/`connect` keys only occur
+# inside `org.modes`/`org_modes`, and _json_field can't extract booleans, hence the
+# direct greps.
 _upload_mode_disabled() {
   printf '%s' "$SUBSTRAIT_BODY" | grep -q '"upload"[[:space:]]*:[[:space:]]*false'
+}
+
+_connect_mode_disabled() {
+  printf '%s' "$SUBSTRAIT_BODY" | grep -q '"connect"[[:space:]]*:[[:space:]]*false'
+}
+
+# ── Logging out (the counterpart of `account` / `login`) ───────────────────────
+
+# The name api/link.py gives the tokens its browser device-link flow mints. A token with
+# this name was created BY a login, so logging out revokes it. Any other name is one the
+# user minted themselves on the portal and pasted in (save-account / save) — that may
+# well be shared with CI or another machine, so it is kept unless --revoke is explicit.
+_LINK_TOKEN_NAME="Claude Code (browser link)"
+
+# _token_row_by_prefix PREFIX — scan the token listing sitting in SUBSTRAIT_BODY (from
+# GET /api/me/tokens or GET /api/projects/{id}/deploy-tokens) and print "id<TAB>name" for
+# the first LIVE row whose token_prefix matches. Prints nothing when there is no match
+# (already revoked, or minted against a different portal).
+_token_row_by_prefix() {
+  printf '%s' "$SUBSTRAIT_BODY" | sed 's/},[[:space:]]*{/}\
+{/g' | awk -v want="$1" '
+    {
+      id=""; name=""; pre=""; revoked=0
+      if (match($0, /"id"[[:space:]]*:[[:space:]]*[0-9]+/)) {
+        s=substr($0,RSTART,RLENGTH); sub(/^"id"[[:space:]]*:[[:space:]]*/,"",s); id=s }
+      if (match($0, /"name"[[:space:]]*:[[:space:]]*"[^"]*"/)) {
+        s=substr($0,RSTART,RLENGTH); sub(/^"name"[[:space:]]*:[[:space:]]*"/,"",s); sub(/"$/,"",s); name=s }
+      if (match($0, /"token_prefix"[[:space:]]*:[[:space:]]*"[^"]*"/)) {
+        s=substr($0,RSTART,RLENGTH); sub(/^"token_prefix"[[:space:]]*:[[:space:]]*"/,"",s); sub(/"$/,"",s); pre=s }
+      # revoked_at is a timestamp string when revoked, null when live.
+      if (match($0, /"revoked_at"[[:space:]]*:[[:space:]]*"/)) revoked=1
+      if (id != "" && pre == want && revoked == 0) { printf "%s\t%s\n", id, name; exit }
+    }'
+}
+
+# _unbind_project TOKEN — drop this project's .substrait/config.json, first revoking the
+# app-scoped deploy token stored in it (that needs the ACCOUNT credential passed in, since
+# token management lives on /api/projects/*; sbd_ tokens can only reach /api/deploy/*).
+# The CLAUDE.md memo block is deliberately left alone — it documents the deploy contract
+# for the session and the user may want it even while unlinked.
+_unbind_project() {
+  local account="${1:-}" ptoken pslug pid row tid
+  if [ ! -f "$SUBSTRAIT_CONFIG_FILE" ]; then
+    echo "This project has no link to remove."
+    return 0
+  fi
+  ptoken="$(_json_get "$SUBSTRAIT_CONFIG_FILE" token 2>/dev/null)" || ptoken=""
+  pslug="$(_json_get "$SUBSTRAIT_CONFIG_FILE" slug 2>/dev/null)" || pslug=""
+  if [ -n "$ptoken" ]; then
+    if [ -z "$account" ]; then
+      echo "note: this project's app deploy token (${ptoken:0:12}…) can only be revoked with an" \
+           "account link — it stays valid until you revoke it on the app's Deploy tab." >&2
+    else
+      # The app-scoped token knows its own app; ask it, then revoke by prefix as the user.
+      pid=""
+      if SUBSTRAIT_TOKEN="$ptoken" substrait_call GET /api/deploy/app 2>/dev/null \
+         && [ "${SUBSTRAIT_STATUS:-}" = "200" ]; then
+        pid="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field id)" || pid=""
+      fi
+      if [ -n "$pid" ] \
+         && SUBSTRAIT_TOKEN="$account" substrait_call GET "/api/projects/$pid/deploy-tokens" \
+         && [ "${SUBSTRAIT_STATUS:-}" = "200" ]; then
+        row="$(_token_row_by_prefix "${ptoken:0:12}")"
+        tid="$(printf '%s' "$row" | cut -f1)"
+        if [ -n "$tid" ]; then
+          SUBSTRAIT_TOKEN="$account" substrait_call DELETE "/api/projects/$pid/deploy-tokens/$tid"
+          if [ "${SUBSTRAIT_STATUS:-}" = "204" ]; then
+            echo "Revoked this project's app deploy token (${ptoken:0:12}…)."
+          else
+            echo "note: could not revoke the app deploy token (HTTP ${SUBSTRAIT_STATUS:-?}) —" \
+                 "revoke it on the app's Deploy tab." >&2
+          fi
+        fi
+      else
+        echo "note: could not reach the portal to revoke the app deploy token —" \
+             "revoke it on the app's Deploy tab." >&2
+      fi
+    fi
+  fi
+  rm -f "$SUBSTRAIT_CONFIG_FILE"
+  rmdir .substrait 2>/dev/null || true
+  echo "Unlinked this project${pslug:+ from $pslug}."
+}
+
+cmd_logout() {
+  local project="" revoke="" keep=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project) project=1; shift ;;
+      --revoke) revoke=1; shift ;;
+      --keep-token) keep=1; shift ;;
+      *) die "unknown arg: $1" ;;
+    esac
+  done
+  [ -n "$revoke" ] && [ -n "$keep" ] && die "--revoke and --keep-token are opposites — pass at most one"
+
+  # Deliberately the STORED token, not _account_token: $SUBSTRAIT_TOKEN is an ambient
+  # override (CI), and logging out must not revoke a credential this machine never saved.
+  local token=""
+  token="$(_json_get "$SUBSTRAIT_GLOBAL_CONFIG" token 2>/dev/null)" || token=""
+
+  # The project first — revoking its deploy token needs the account link we are about to
+  # delete (and the portal URL, which the project config may be the only source of).
+  [ -n "$project" ] && _unbind_project "$token"
+
+  if [ -z "$token" ]; then
+    echo "No account link on this machine — nothing to log out of."
+    return 0
+  fi
+
+  if [ -n "$keep" ]; then
+    echo "Keeping the personal token (${token:0:12}…) valid on the portal, as asked."
+  elif SUBSTRAIT_TOKEN="$token" substrait_call GET /api/me/tokens \
+       && [ "${SUBSTRAIT_STATUS:-}" = "200" ]; then
+    local row tid tname
+    row="$(_token_row_by_prefix "${token:0:12}")"
+    tid="$(printf '%s' "$row" | cut -f1)"; tname="$(printf '%s' "$row" | cut -f2)"
+    if [ -z "$tid" ]; then
+      echo "note: the portal has no live token matching ${token:0:12}… (already revoked?)" \
+           "— removing the local link only." >&2
+    elif [ "$tname" = "$_LINK_TOKEN_NAME" ] || [ -n "$revoke" ]; then
+      SUBSTRAIT_TOKEN="$token" substrait_call DELETE "/api/me/tokens/$tid"
+      if [ "${SUBSTRAIT_STATUS:-}" = "204" ]; then
+        echo "Revoked the personal access token '$tname' (${token:0:12}…) on the portal."
+      else
+        echo "note: could not revoke the token (HTTP ${SUBSTRAIT_STATUS:-?}) — revoke it on" \
+             "the portal's Access tokens page." >&2
+      fi
+    else
+      echo "note: '$tname' was minted by you on the portal, not by /substrait:login, so it" \
+           "may be in use on another machine — it was NOT revoked. Re-run with --revoke to" \
+           "revoke it, or delete it on the portal's Access tokens page." >&2
+    fi
+  else
+    echo "note: could not reach the portal (HTTP ${SUBSTRAIT_STATUS:-?}) — the local link is" \
+         "removed, but the token stays valid until revoked on the Access tokens page." >&2
+  fi
+
+  rm -f "$SUBSTRAIT_GLOBAL_CONFIG"
+  rmdir "$(dirname "$SUBSTRAIT_GLOBAL_CONFIG")" 2>/dev/null || true
+  echo "Logged out of this machine's Substrait account link."
+  [ -z "$project" ] && [ -f "$SUBSTRAIT_CONFIG_FILE" ] \
+    && echo "This project stays bound to $(substrait_app_slug 2>/dev/null || echo "its app")" \
+            "— run 'logout --project' to unbind it too."
+  return 0
 }
 
 # ── Project binding on top of an account link (slug only, no secret) ────────────
@@ -312,8 +478,13 @@ cmd_apps() {
   # Fail-open: an unreachable /auth/me must not break the listing.
   if SUBSTRAIT_TOKEN="$token" substrait_call GET /api/auth/me 2>/dev/null \
      && [ "${SUBSTRAIT_STATUS:-}" = "200" ] && _upload_mode_disabled; then
-    echo "note: this workspace has new-app creation from Claude Code disabled —" \
-         "link an existing app; 'create' will be refused." >&2
+    if _connect_mode_disabled; then
+      echo "note: this workspace has new-app creation from Claude Code disabled —" \
+           "link an existing app; 'create' will be refused." >&2
+    else
+      echo "note: this workspace deploys from GitHub only — a new app must be created" \
+           "against a repo: 'create --name NAME --repo OWNER/REPO' ('repos' lists them)." >&2
+    fi
   fi
   SUBSTRAIT_TOKEN="$token" substrait_call GET /api/projects || exit $?
   [ "${SUBSTRAIT_STATUS:-}" = "200" ] || die "could not list apps (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
@@ -331,16 +502,20 @@ cmd_apps() {
     }'
 }
 
-# _bind_project SLUG — write the slug-only project ref, verify it resolves (and that
-# the account may deploy it), cache the host, and record the CLAUDE.md memo.
+# _bind_project SLUG TOKEN [MODE] — write the slug-only project ref, verify it resolves
+# (and that the account may deploy it), cache the host, and record the CLAUDE.md memo.
+# Binding (re)points this project at an app, so any deploy_mode recorded for a PREVIOUS
+# app is dropped; MODE, when given, records the new app's mode instead. Recording nothing
+# is the safe default — substrait-deploy.sh then follows the server's state.
 _bind_project() {
-  local slug="$1" token="$2"
-  _write_project_ref "$slug"
+  local slug="$1" token="$2" mode="${3:-}"
+  _write_project_ref "$slug" "" reset
   SUBSTRAIT_TOKEN="$token" substrait_call GET /api/deploy/app || exit $?
   [ "${SUBSTRAIT_STATUS:-}" = "200" ] || die "could not bind to '$slug' (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
   local host
   host="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field preview_hostname)"; host="${host:-${slug}.apps.substrait.build}"
-  _write_project_ref "$slug" "$host"   # re-write with the discovered host
+  _write_project_ref "$slug" "$host" reset   # re-write with the discovered host
+  [ -n "$mode" ] && _write_deploy_mode "$mode"
   substrait_write_memo ensure
   echo "Linked this project to $slug (https://$host). Run /substrait:deploy to ship it."
 }
@@ -358,11 +533,24 @@ cmd_use() {
   _bind_project "$slug" "$token"
 }
 
+# _resolve_repo_row REPO — the `repos` row for REPO (full_name<TAB>default_branch<TAB>
+# installation_id), or die with the install-the-App guidance. Callers must propagate the
+# failure themselves (`row="$(_resolve_repo_row "$r")" || exit 1`): die() only exits the
+# command-substitution subshell.
+_resolve_repo_row() {
+  local repo="$1" row
+  row="$(cmd_repos | awk -F'\t' -v r="$repo" '$1 == r {print; exit}')" || true
+  [ -n "$row" ] || die "repo '$repo' isn't reachable through your GitHub App installations — run 'repos' for the list (or install the app on that repo first)."
+  printf '%s' "$row"
+}
+
 cmd_create() {
-  local name=""
+  local name="" repo="" branch=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --name) name="$2"; shift 2 ;;
+      --repo) repo="$2"; shift 2 ;;
+      --branch) branch="$2"; shift 2 ;;
       *) die "unknown arg: $1" ;;
     esac
   done
@@ -370,19 +558,55 @@ cmd_create() {
   local token; token="$(_account_token)" || die "no account link on this machine — run /substrait:login to authorize your account first."
   # Escape the two JSON-special characters a display name could carry.
   local esc; esc="$(printf '%s' "$name" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  local payload="{\"display_name\":\"$esc\"}"
+  # With --repo the app is born GitHub-connected (mode 3) — REQUIRED in a workspace that
+  # has zip uploads disabled, since a bare app there would have no way to deploy. Without
+  # it the app is created for zip deploys and can still switch later via set-mode.
+  if [ -n "$repo" ]; then
+    local row inst def_branch esc_branch
+    row="$(_resolve_repo_row "$repo")" || exit 1
+    def_branch="$(printf '%s' "$row" | cut -f2)"
+    inst="$(printf '%s' "$row" | cut -f3)"
+    [ -n "$branch" ] || branch="$def_branch"
+    # $repo came from the server's own listing, but the branch is user-supplied and git
+    # permits a quote in a ref name — escape it like the display name.
+    esc_branch="$(printf '%s' "$branch" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    payload="{\"display_name\":\"$esc\",\"installation_id\":$inst,\"repo_full_name\":\"$repo\",\"branch\":\"$esc_branch\"}"
+  fi
   SUBSTRAIT_TOKEN="$token" substrait_call POST /api/projects/create \
-    -H "Content-Type: application/json" --data "{\"display_name\":\"$esc\"}" || exit $?
+    -H "Content-Type: application/json" --data "$payload" || exit $?
   if [ "${SUBSTRAIT_STATUS:-}" != "201" ]; then
     # 403 = creation refused by policy (workspace mode toggle, quota, or missing
     # permission) — the backend's `detail` is user-facing prose worth relaying as-is.
     local detail=""
     [ "${SUBSTRAIT_STATUS:-}" = "403" ] && detail="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field detail)"
-    [ -n "$detail" ] && die "could not create app: $detail"
+    if [ -n "$detail" ]; then
+      # Only a disabled-MODE refusal is fixable with --repo. The same 403 also carries
+      # quota exhaustion and missing-permission refusals, where suggesting a retry would
+      # just buy a second identical failure — so match the mode wording (from
+      # services/projects._enforce_mode) before appending the hint.
+      if [ -z "$repo" ]; then
+        case "$detail" in
+          *"Coding on Claude Code"*|*"doesn't have"*)
+            detail="$detail. If this workspace deploys from GitHub, create the app against a repo instead: create --name \"$name\" --repo OWNER/REPO (run 'repos' for the list)" ;;
+        esac
+      fi
+      die "could not create app: $detail"
+    fi
     die "could not create app (HTTP $SUBSTRAIT_STATUS): $SUBSTRAIT_BODY"
   fi
   local slug; slug="$(printf '%s' "$SUBSTRAIT_BODY" | _json_field slug)" || die "bad create response"
-  echo "Created app '$name' ($slug)."
-  _bind_project "$slug" "$token"
+  # _bind_project drops any deploy_mode left over from a previous app, then records the
+  # one passed here. The bare path deliberately records NOTHING: asserting "upload" would
+  # make the choice sticky for the directory, and a later `use --app <connected app>`
+  # would then hit the choice-vs-server mismatch (whose suggested fix disconnects it).
+  if [ -n "$repo" ]; then
+    echo "Created app '$name' ($slug), deploying from $repo@$branch."
+    _bind_project "$slug" "$token" connect
+  else
+    echo "Created app '$name' ($slug)."
+    _bind_project "$slug" "$token"
+  fi
 }
 
 # ── Deploy-mode choice (upload = zip, connect = GitHub) ─────────────────────────
@@ -487,8 +711,7 @@ cmd_set_mode() {
     [ -n "$repo" ] || die "--repo OWNER/REPO is required to switch to GitHub deploys (run 'repos' for the list)"
     # Resolve installation + default branch from the account's repo list.
     local row inst def_branch
-    row="$(cmd_repos | awk -F'\t' -v r="$repo" '$1 == r {print; exit}')" || true
-    [ -n "$row" ] || die "repo '$repo' isn't reachable through your GitHub App installations — run 'repos' for the list (or install the app on that repo first)."
+    row="$(_resolve_repo_row "$repo")" || exit 1
     def_branch="$(printf '%s' "$row" | cut -f2)"
     inst="$(printf '%s' "$row" | cut -f3)"
     [ -n "$branch" ] || branch="$def_branch"
@@ -576,6 +799,7 @@ case "${1:-status}" in
   account)      shift; cmd_account "$@" ;;
   save-account) shift; cmd_save_account "$@" ;;
   whoami)       shift; cmd_whoami "$@" ;;
+  logout)       shift; cmd_logout "$@" ;;
   apps)         shift; cmd_apps "$@" ;;
   use)          shift; cmd_use "$@" ;;
   create)       shift; cmd_create "$@" ;;
@@ -585,5 +809,5 @@ case "${1:-status}" in
   login)  shift; cmd_login "$@" ;;
   save)   shift; cmd_save "$@" ;;
   status) shift || true; cmd_status ;;
-  *) die "unknown command: ${1}. Use account|save-account|whoami|apps|use|create|modes|repos|set-mode|login|save|status." ;;
+  *) die "unknown command: ${1}. Use account|save-account|whoami|logout|apps|use|create|modes|repos|set-mode|login|save|status." ;;
 esac
