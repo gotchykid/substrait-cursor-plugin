@@ -4,10 +4,8 @@
       "source": {
         "source": "github",
         "repo": "substrait-build/substrait-claudecode-plugin"
-      }
+      },
+      "autoUpdate": true
     }
-  },
-  "enabledPlugins": {
-    "substrait@substrait": true
   }
 }
