@@ -1,0 +1,5 @@
+# Runtime artifacts the sessionStart hook writes into the plugin root. They only appear
+# here when someone tests this directory in place; in a real install they live under
+# Cursor's plugin store. Never commit or publish them.
+.last-version-check
+.portal-url

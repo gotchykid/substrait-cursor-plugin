@@ -11,14 +11,26 @@
 #     secret); requests then carry the slug in an X-Substrait-App header.
 # Resolution order (a project token wins over the account token):
 #   portal URL : $SUBSTRAIT_PORTAL_URL  ->  project config  ->  global config
+#                                       ->  the plugin's own userConfig (see below)
 #   token      : $SUBSTRAIT_TOKEN       ->  project config  ->  global config
 
 SUBSTRAIT_CONFIG_FILE="${SUBSTRAIT_CONFIG_FILE:-.substrait/config.json}"
 SUBSTRAIT_GLOBAL_CONFIG="${SUBSTRAIT_GLOBAL_CONFIG:-$HOME/.substrait/config.json}"
+# The plugin root (this script lives in <root>/scripts/). Used for the userConfig sidecar
+# below; self-locating so the same file works unchanged under Claude Code and Cursor.
+_SUBSTRAIT_PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." 2>/dev/null && pwd)"
 # There is NO default portal — the URL is always explicit (multi-tenant: a wrong default
 # would silently target the wrong installation). It's supplied once at login/link time via
 # --portal-url or $SUBSTRAIT_PORTAL_URL and then stored as portal_url in the config; every
 # later command reads it from there.
+#
+# LAST-RESORT tier: the Claude Code plugin declares a `portal_url` userConfig option, so a
+# user can answer it once when installing the plugin instead of passing --portal-url. Claude
+# Code exports that answer to HOOK processes as $CLAUDE_PLUGIN_OPTION_PORTAL_URL — not to the
+# Bash tool that runs these scripts — so the SessionStart hook mirrors it into the sidecar
+# file below and we read that. It ranks BELOW both config files on purpose: an explicit
+# login/link is always the stronger signal, and this only fills the gap before one happens.
+_SUBSTRAIT_PORTAL_SIDECAR="${_SUBSTRAIT_PLUGIN_ROOT:-.}/.portal-url"
 
 # _json_field KEY — read a JSON object from stdin, print obj[KEY]. Exit 1 if absent.
 # Used to pull fields out of API response bodies (the device-link start/poll payloads)
@@ -43,12 +55,21 @@ _json_field() {
 _json_get() { [ -f "$1" ] || return 1; _json_field "$2" < "$1"; }
 
 # Resolve the portal URL from (in order) the env override, the project config, the global
-# config. Returns 1 (no output) when none is set — there is no default; the caller must
-# surface a "run /substrait:login --portal-url <URL>" message.
+# config, and finally the plugin's own userConfig answer (env var when we happen to inherit
+# it, else the sidecar the SessionStart hook writes). Returns 1 (no output) when none is
+# set — there is no default; the caller must surface a "run /substrait:login --portal-url
+# <URL>" message.
 substrait_portal_url() {
   if [ -n "${SUBSTRAIT_PORTAL_URL:-}" ]; then printf '%s' "${SUBSTRAIT_PORTAL_URL%/}"; return 0; fi
   local v; if v="$(_json_get "$SUBSTRAIT_CONFIG_FILE" portal_url)"; then printf '%s' "${v%/}"; return 0; fi
   if v="$(_json_get "$SUBSTRAIT_GLOBAL_CONFIG" portal_url)"; then printf '%s' "${v%/}"; return 0; fi
+  if [ -n "${CLAUDE_PLUGIN_OPTION_PORTAL_URL:-}" ]; then
+    printf '%s' "${CLAUDE_PLUGIN_OPTION_PORTAL_URL%/}"; return 0
+  fi
+  if [ -f "$_SUBSTRAIT_PORTAL_SIDECAR" ]; then
+    v="$(head -1 "$_SUBSTRAIT_PORTAL_SIDECAR" 2>/dev/null | tr -d '[:space:]')"
+    if [ -n "$v" ]; then printf '%s' "${v%/}"; return 0; fi
+  fi
   return 1
 }
 
@@ -77,7 +98,7 @@ substrait_call() {
   local method="$1" path="$2"; shift 2
   local base token tmp slug
   base="$(substrait_portal_url)" || {
-    echo "No portal URL configured — run /substrait:login --portal-url <your Substrait API URL> (there is no default)." >&2; return 2; }
+    echo "No portal URL configured — run /substrait:login --portal-url <your Substrait API URL> (there is no default; you can also set it once as the plugin's 'Substrait portal URL' option)." >&2; return 2; }
   token="$(substrait_token)" || {
     echo "No token configured — run /substrait:link." >&2; return 2; }
   # A personal token authenticates the USER; the target app must be named explicitly.

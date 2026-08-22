@@ -6,12 +6,20 @@ editor. The plugin bundles:
 - the **`substrait-app`** skill — scaffolds a contract-compliant app (FastAPI `backend/`
   on port 8000, `cicd/` Dockerfiles, optional React+Vite+Tailwind `frontend/`, Flyway
   migrations); and
-- two commands:
+- six commands:
+  - **`/substrait:login`** — authenticate this machine with your Substrait account (mints
+    the personal access token; one browser authorization, no copy/paste).
+  - **`/substrait:logout`** — sign this machine out again: revokes the login-minted token on
+    the portal and drops the stored credential (`--project` also unbinds this folder).
   - **`/substrait:link`** — link this project to one of your apps. Opens the portal in your
     browser so you pick the app while logged in; the app-scoped deploy token is fetched
     automatically (no copy/paste). Falls back to pasting a token for headless/CI.
   - **`/substrait:deploy`** — package the project (source only) and deploy it to the linked
     app (`--watch` to follow the build).
+  - **`/substrait:env`** — view and set the linked app's environment variables and secrets
+    (secrets are write-only; changes live-apply to a running app).
+  - **`/substrait:library`** — browse the platform's API Library and design an app against
+    existing APIs.
 
 ## Install
 
@@ -39,6 +47,10 @@ Config is **per project** in `./.substrait/config.json` (chmod 600, gitignored) 
 URL + the app-scoped token. You can override with `SUBSTRAIT_PORTAL_URL` / `SUBSTRAIT_TOKEN`
 in the environment.
 
+**Portal URL.** Substrait is multi-tenant, so there is no default — the URL is always
+explicit. Supply it once with `/substrait:login --portal-url <URL>` and every later command
+reads it from the config.
+
 ## Maintainers
 
 **This repository is published, not edited here.** It is generated from canonical sources
@@ -56,3 +68,7 @@ in the Substrait monorepo and pushed by `scripts/publish-cursor.sh`:
 To ship a change, edit the sources in the monorepo, run `bash scripts/sync-cursor.sh`, then
 `bash scripts/publish-cursor.sh`. Direct commits here will be overwritten on the next
 publish.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
