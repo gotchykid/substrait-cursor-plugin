@@ -392,7 +392,7 @@ and treat a user's deletion of the block as an opt-out.
 This skill ships inside the **`substrait` Cursor plugin** (it's the plugin's bundled
 skill, alongside the `/substrait:link` and `/substrait:deploy` commands). Update it the
 way you update any Cursor plugin — from the marketplace you installed it from (the
-`substrait` plugin in the `gotchykid/substrait-cursor-plugin` marketplace).
+`substrait` plugin in the `substrait-build/substrait-cursor-plugin` marketplace).
 
 The plugin doesn't self-update, but a `sessionStart` hook checks once a day (fail-silent)
 whether a newer version is published and, if so, nudges you to update — it never changes

@@ -3,7 +3,7 @@
     "substrait": {
       "source": {
         "source": "github",
-        "repo": "gotchykid/substrait-claudecode-plugin"
+        "repo": "substrait-build/substrait-claudecode-plugin"
       }
     }
   },

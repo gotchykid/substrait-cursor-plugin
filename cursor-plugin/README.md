@@ -26,10 +26,10 @@ editor. The plugin bundles:
 In Cursor, add the marketplace and install the plugin:
 
 ```
-gotchykid/substrait-cursor-plugin
+substrait-build/substrait-cursor-plugin
 ```
 
-(Cursor → Plugins/Marketplace → add the `gotchykid/substrait-cursor-plugin` repo → install
+(Cursor → Plugins/Marketplace → add the `substrait-build/substrait-cursor-plugin` repo → install
 the `substrait` plugin.)
 
 ## Set up & deploy

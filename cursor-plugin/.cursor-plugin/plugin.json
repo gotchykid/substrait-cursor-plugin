@@ -1,13 +1,13 @@
 {
   "name": "substrait",
-  "version": "2026.08.22.024229",
+  "version": "2026.08.22.031051",
   "description": "Build and deploy apps on the Substrait platform from Cursor. Bundles the substrait-app skill (scaffold apps to the upload/deploy contract) plus /substrait:login to authenticate your Substrait account and /substrait:logout to sign the machine out again, /substrait:link and /substrait:deploy to connect a local project to a Substrait app and ship it without leaving the editor, /substrait:env to manage the app's environment variables and secrets, and /substrait:library to browse the platform's API Library and design apps against existing APIs.",
   "author": {
     "name": "Substrait",
     "url": "https://app.substrait.build"
   },
   "homepage": "https://app.substrait.build",
-  "repository": "https://github.com/gotchykid/substrait-cursor-plugin",
+  "repository": "https://github.com/substrait-build/substrait-cursor-plugin",
   "license": "MIT",
   "keywords": [
     "substrait",

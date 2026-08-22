@@ -18,7 +18,7 @@
         "url": "https://app.substrait.build"
       },
       "homepage": "https://app.substrait.build",
-      "repository": "https://github.com/gotchykid/substrait-cursor-plugin",
+      "repository": "https://github.com/substrait-build/substrait-cursor-plugin",
       "license": "MIT",
       "logo": "assets/logo.svg",
       "category": "deployment",

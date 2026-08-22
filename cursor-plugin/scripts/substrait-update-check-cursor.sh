@@ -46,7 +46,7 @@ _plugin_version() {  # reads plugin.json "version" from stdin (flat, server-cont
   sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
 }
 
-RAW_BASE="https://raw.githubusercontent.com/gotchykid/substrait-cursor-plugin/main/cursor-plugin"
+RAW_BASE="https://raw.githubusercontent.com/substrait-build/substrait-cursor-plugin/main/cursor-plugin"
 
 # Prefer the plugin release version; fall back to the skill (scaffold) version when
 # either side predates the plugin.json version field.
