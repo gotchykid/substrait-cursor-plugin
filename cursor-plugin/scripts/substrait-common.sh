@@ -73,6 +73,25 @@ substrait_portal_url() {
   return 1
 }
 
+# substrait_plugin_version — the RELEASE version of the plugin copy running this script,
+# read from its own manifest (.claude-plugin/ under Claude Code, .cursor-plugin/ under
+# Cursor). Sent on every API call as X-Substrait-Plugin.
+#
+# The portal uses it for something less obvious than "which build deployed this app": any
+# client that sends NOTHING is running a build from before 2026-08-22, i.e. one carrying the
+# project-scope update bug (`claude plugin update` silently updates only the user scope). We
+# can never ship a fix to those clients — they'd have to update first — so their SILENCE is
+# the only signal available, and the portal keys the remediation banner off it.
+substrait_plugin_version() {
+  local f
+  for f in "$_SUBSTRAIT_PLUGIN_ROOT/.claude-plugin/plugin.json" \
+           "$_SUBSTRAIT_PLUGIN_ROOT/.cursor-plugin/plugin.json"; do
+    [ -f "$f" ] || continue
+    _json_get "$f" version && return 0
+  done
+  return 1
+}
+
 substrait_token() {
   if [ -n "${SUBSTRAIT_TOKEN:-}" ]; then printf '%s' "$SUBSTRAIT_TOKEN"; return 0; fi
   if _json_get "$SUBSTRAIT_CONFIG_FILE" token; then return 0; fi
@@ -111,6 +130,11 @@ substrait_call() {
       echo "This project isn't bound to an app yet — run /substrait:link to pick one." >&2
       return 2
     fi
+  fi
+  # Identify the plugin build. Harmless on every endpoint; the portal reads it on deploy.
+  local pv
+  if pv="$(substrait_plugin_version)" && [ -n "$pv" ]; then
+    set -- -H "X-Substrait-Plugin: $pv" "$@"
   fi
   tmp="$(mktemp)" || return 1
   SUBSTRAIT_STATUS="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" \
